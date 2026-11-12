@@ -18,6 +18,18 @@ describe('DDL guard (schema owned by another system)', () => {
     await expect(sequelize.sync({ alter: true })).rejects.toThrow(/Refused/);
   });
 
+  it('lets session-temporary objects through: findOrCreate\'s pg_temp function, temp tables', async () => {
+    const sequelize = guarded();
+    for (const sql of [
+      'CREATE OR REPLACE FUNCTION pg_temp.testfunc(OUT response "t"."x") RETURNS RECORD AS $func$ BEGIN END $func$ LANGUAGE plpgsql; SELECT 1; DROP FUNCTION IF EXISTS pg_temp.testfunc();',
+      'DROP FUNCTION IF EXISTS pg_temp.testfunc()',
+      'CREATE TEMP TABLE scratch (id int)',
+    ]) {
+      await expect(sequelize.query(sql)).rejects.not.toThrow(/Refused/);
+    }
+    await expect(sequelize.query('CREATE FUNCTION public.f() RETURNS int AS $$ SELECT 1 $$ LANGUAGE sql')).rejects.toThrow(/Refused/);
+  });
+
   it('lets reads and writes through (they fail here only for want of a database)', async () => {
     const sequelize = guarded();
     await expect(sequelize.query('SELECT 1')).rejects.not.toThrow(/Refused/);

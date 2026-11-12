@@ -14,7 +14,7 @@ import { PlacementResolver } from '../placement.js';
 import { SchemaSync } from '../schema-sync.js';
 import { TenantRunner } from '../tenant-runner.js';
 import { buildCopyPlan, type TablePlan } from './copy-plan.js';
-import { count, insertRows, linkSelf, mapTable, qualified, readRows, remapColumn, storeMap, type Row } from './copy-sql.js';
+import { count, insertRows, linkSelf, linkSelfKept, mapTable, qualified, readRows, remapColumn, storeMap, type Row } from './copy-sql.js';
 
 export interface MoveOptions {
   companyId: number;
@@ -148,31 +148,36 @@ export class CompanyMover {
   }
 
   private async copyTable(source: Sequelize, src: Transaction, fromSchema: string, target: Sequelize, tgt: Transaction, toSchema: string, step: TablePlan, companyId: number): Promise<number> {
+    const serial = step.idKind === 'serial';
     const pairs: Array<[number, number]> = [];
-    const selfLinks = new Map<string, Array<[number, number]>>(step.selfColumns.map((column) => [column, []]));
+    const selfLinks = new Map<string, Array<[unknown, unknown]>>(step.selfColumns.map((column) => [column, []]));
     let copiedRows = 0;
     for await (const batch of readRows(source, src, fromSchema, step.table, step.columns, partitionColumnOf(step.model as never), companyId, step.hasId)) {
       const parents = batch.map((row) => Object.fromEntries(step.selfColumns.map((column) => [column, row[column]])));
       const rows = batch.map((row) => {
+        // A serial id is given anew by the target; a kept id (UUID) is copied as it is.
         const { id: _id, ...rest } = row;
-        const values: Row = step.hasId ? rest : { ...row };
+        const values: Row = serial ? rest : { ...row };
         for (const column of step.selfColumns) values[column] = null;
         return values;
       });
-      const ids = await insertRows(target, tgt, toSchema, step.table, await this.translateInline(target, tgt, step, rows), step.hasId);
-      if (step.hasId) {
-        batch.forEach((row, index) => {
-          pairs.push([row.id as number, ids[index] as number]);
-          for (const column of step.selfColumns) {
-            const parent = parents[index]?.[column];
-            if (typeof parent === 'number') selfLinks.get(column)?.push([ids[index] as number, parent]);
-          }
-        });
-      }
+      const ids = await insertRows(target, tgt, toSchema, step.table, await this.translateInline(target, tgt, step, rows), serial);
+      batch.forEach((row, index) => {
+        const id = serial ? ids[index] : row.id;
+        if (serial) pairs.push([row.id as number, id as number]);
+        for (const column of step.selfColumns) {
+          const parent = parents[index]?.[column];
+          if (parent !== null && parent !== undefined) selfLinks.get(column)?.push([id, parent]);
+        }
+      });
       copiedRows += batch.length;
     }
-    if (step.hasId) await storeMap(target, tgt, step.table, pairs);
-    for (const [column, links] of selfLinks) await linkSelf(target, tgt, toSchema, step.table, column, links);
+    if (serial) {
+      await storeMap(target, tgt, step.table, pairs);
+      for (const [column, links] of selfLinks) await linkSelf(target, tgt, toSchema, step.table, column, links as Array<[number, number]>);
+    } else if (step.idKind === 'natural') {
+      for (const [column, links] of selfLinks) await linkSelfKept(target, tgt, toSchema, step.table, column, step.idType ?? 'text', links);
+    }
     return copiedRows;
   }
 

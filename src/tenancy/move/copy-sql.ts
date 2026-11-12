@@ -23,16 +23,18 @@ export async function* readRows(sequelize: Sequelize, t: Transaction, schema: st
     if (all.length) yield all;
     return;
   }
-  let last = 0;
+  // No lower bound to start: ids may be UUIDs or any other ordered type, not only positive integers.
+  let last: unknown;
   for (;;) {
+    const after = last === undefined ? '' : ' AND id > $2';
     const rows = await select<Row>(
       sequelize, t,
-      `SELECT ${list} FROM ${qualified(schema, table)} WHERE ${quoteIdent(partitionColumn)} = $1 AND id > $2 ORDER BY id LIMIT ${batch}`,
-      [companyId, last],
+      `SELECT ${list} FROM ${qualified(schema, table)} WHERE ${quoteIdent(partitionColumn)} = $1${after} ORDER BY id LIMIT ${batch}`,
+      last === undefined ? [companyId] : [companyId, last],
     );
     if (rows.length === 0) return;
     yield rows;
-    last = rows[rows.length - 1]?.id as number;
+    last = rows[rows.length - 1]?.id;
   }
 }
 
@@ -66,6 +68,19 @@ export async function linkSelf(sequelize: Sequelize, t: Transaction, schema: str
     await sequelize.query(
       `UPDATE ${target} SET ${quoteIdent(column)} = (SELECT new_id FROM ${mapTable(table)} m WHERE m.old_id = v.old_id) FROM (VALUES ${values}) AS v(id, old_id) WHERE ${target}.id = v.id`,
       { transaction: t },
+    );
+  }
+}
+
+/** Self references of a table whose ids were kept: each row's column set back to its old parent (same id). */
+export async function linkSelfKept(sequelize: Sequelize, t: Transaction, schema: string, table: string, column: string, idType: string, links: Array<[unknown, unknown]>): Promise<void> {
+  const target = qualified(schema, table);
+  const type = /^[a-z ]+$/.test(idType) ? idType : 'text';
+  for (let start = 0; start < links.length; start += 20_000) {
+    const chunk = links.slice(start, start + 20_000);
+    await sequelize.query(
+      `UPDATE ${target} SET ${quoteIdent(column)} = v.parent::${type} FROM unnest($1::text[], $2::text[]) AS v(id, parent) WHERE ${target}.id = v.id::${type}`,
+      { transaction: t, bind: [chunk.map(([id]) => String(id)), chunk.map(([, parent]) => String(parent))] },
     );
   }
 }

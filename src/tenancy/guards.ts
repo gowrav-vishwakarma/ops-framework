@@ -69,6 +69,17 @@ export function installQueryGuards(sequelize: Sequelize, dbKey: string, onQuery?
 /** Statements that change a schema. */
 const DDL = /^\s*(?:\/\*[\s\S]*?\*\/\s*)*(CREATE|ALTER|DROP|TRUNCATE|RENAME|COMMENT\s+ON|GRANT|REVOKE)\b/i;
 
+/**
+ * Session-temporary objects change no schema: Sequelize's `findOrCreate` on Postgres creates and
+ * drops a `pg_temp` function, and a query may use a temporary table.
+ */
+const TEMPORARY = /^\s*(?:\/\*[\s\S]*?\*\/\s*)*(?:CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+pg_temp\.|DROP\s+FUNCTION\s+(?:IF\s+EXISTS\s+)?pg_temp\.|CREATE\s+(?:LOCAL\s+)?TEMP(?:ORARY)?\s+TABLE\b)/i;
+
+/** Whether a statement changes a schema (temporary objects do not). */
+export function isSchemaChange(sql: string): boolean {
+  return DDL.test(sql) && !TEMPORARY.test(sql);
+}
+
 export class SchemaChangeRefused extends InternalServerErrorException {
   constructor(dbKey: string, sql: string) {
     super(`Refused a schema change on "${dbKey}": another system owns this schema (features.schema 'external'). Statement: ${sql.slice(0, 120)}`);
@@ -87,7 +98,7 @@ export function installDdlGuard(sequelize: Sequelize, dbKey: string): void {
   const query = target.query.bind(sequelize);
   target.query = (sql: unknown, options?: unknown) => {
     const text = typeof sql === 'string' ? sql : ((sql as { query?: string } | null)?.query ?? '');
-    if (DDL.test(text)) return Promise.reject(new SchemaChangeRefused(dbKey, text));
+    if (isSchemaChange(text)) return Promise.reject(new SchemaChangeRefused(dbKey, text));
     return query(sql, options);
   };
   target.sync = () => Promise.reject(new SchemaChangeRefused(dbKey, 'sync()'));

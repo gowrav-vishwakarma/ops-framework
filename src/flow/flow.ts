@@ -6,15 +6,10 @@ import { stepKind, type FlowStep, type FlowStepIn, type StepTarget } from './kin
 import { FlowRun, type FlowContext, type FlowMethod } from './run.js';
 
 export interface FlowDefinition<M = any> {
-  /** A numbered file (`NNN-<phase>-<name>.ts`): its steps, in the phase its name says. */
-  steps?: FlowStep<M>[];
-  /**
-   * The operation's `flow.ts`: steps per phase in one file. Each list runs at the start of its
-   * phase, before the numbered step files of that phase.
-   */
-  check?: FlowStepIn<'check', M>[];
-  before?: FlowStepIn<'before', M>[];
-  after?: FlowStepIn<'after', M>[];
+  /** The program, in order. The phase is the file's (`NNN-<phase>-<name>.ts`). */
+  steps: FlowStep<M>[];
+  /** Set by `checkFlow` / `beforeFlow` / `afterFlow`: the phase the steps were typed for, checked against the file name. */
+  phase?: Phase;
   /** Code the steps call by name (`{ kind: 'call', method: 'splitPayments' }`): the part that is not repetitive. */
   methods?: Record<string, FlowMethod>;
   /** One line for the flow document; default: the steps' own lines. */
@@ -33,8 +28,6 @@ export interface FlowPlace {
 export interface FlowFile {
   readonly isFlow: true;
   readonly definition: FlowDefinition;
-  /** Phases a `flow.ts` has steps for (empty for a numbered file's `steps`). */
-  phases(): Phase[];
   bindPhase(phase: Phase, place: FlowPlace): { describe: string } & Partial<Record<Phase, (c: never) => Promise<void>>>;
 }
 
@@ -81,9 +74,9 @@ function check(steps: readonly FlowStep[], phase: Phase, target: Exclude<StepTar
 }
 
 /**
- * Step files written as data. Either one operation's rules in its `ops/<op>/flow.ts`, grouped by
- * phase (`{ check: [...], before: [...], after: [...] }`), or one numbered file
- * `ops/<op>/NNN-<phase>-<name>.ts` with `steps`, exactly where a code step would go. Checked when the app boots (kinds, phases,
+ * A step file written as data: `ops/<op>/NNN-<phase>-<name>.ts`, numbered like every step file,
+ * so flows and code steps interleave in any order. `checkFlow` / `beforeFlow` / `afterFlow` type the
+ * steps for their phase (and the loader checks the file name agrees); `flow` takes any steps. Checked when the app boots (kinds, phases,
  * expressions, methods); a mistake fails boot with the file name.
  *
  * ```ts
@@ -98,23 +91,37 @@ function check(steps: readonly FlowStep[], phase: Phase, target: Exclude<StepTar
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export function flow<M = unknown>(definition: FlowDefinition<M>): FlowFile {
   const methods = definition.methods ?? {};
-  const phased = (['check', 'before', 'after'] as const).filter((phase) => definition[phase] !== undefined);
-  if (definition.steps && phased.length) throw new Error('A flow has either `steps` (a numbered file) or `check` / `before` / `after` (an operation\'s flow.ts), not both');
-  if (!definition.steps && !phased.length) throw new Error('A flow needs `steps`, or `check` / `before` / `after` lists');
+  if (!Array.isArray(definition.steps)) throw new Error('A flow needs `steps`');
   return {
     isFlow: true,
     definition,
-    phases: () => [...phased],
     bindPhase(phase, place) {
-      const steps = definition.steps ?? definition[phase];
-      if (!steps) throw new Error(`no ${phase} steps in this flow`);
-      const lines = check(steps as FlowStep[], phase, targetOf(place.op), methods, definition.steps ? 'steps' : phase, place.model);
+      const steps = definition.steps;
+      if (definition.phase && definition.phase !== phase) {
+        throw new Error(`this is a ${definition.phase} flow (${definition.phase}Flow) but the file name says ${phase}: rename the file or change the helper`);
+      }
+      const lines = check(steps as FlowStep[], phase, targetOf(place.op), methods, 'steps', place.model);
       const run = async (c: FlowContext) => {
         await new FlowRun(c, phase, place.file, methods).steps(steps as FlowStep[]);
       };
       return { describe: definition.describe ?? lines.join('; '), [phase]: run };
     },
   };
+}
+
+/** A flow for a `NNN-check-*` file: only kinds allowed in checks (read only, issues) compile. */
+export function checkFlow<M = unknown>(definition: Omit<FlowDefinition<M>, 'steps' | 'phase'> & { steps: FlowStepIn<'check', M>[] }): FlowFile {
+  return flow<M>({ ...definition, steps: definition.steps as FlowStep<M>[], phase: 'check' });
+}
+
+/** A flow for a `NNN-before-*` file (after every check passed, before the main change). */
+export function beforeFlow<M = unknown>(definition: Omit<FlowDefinition<M>, 'steps' | 'phase'> & { steps: FlowStepIn<'before', M>[] }): FlowFile {
+  return flow<M>({ ...definition, steps: definition.steps as FlowStep<M>[], phase: 'before' });
+}
+
+/** A flow for a `NNN-after-*` file (after the main change, same transaction). */
+export function afterFlow<M = unknown>(definition: Omit<FlowDefinition<M>, 'steps' | 'phase'> & { steps: FlowStepIn<'after', M>[] }): FlowFile {
+  return flow<M>({ ...definition, steps: definition.steps as FlowStep<M>[], phase: 'after' });
 }
 
 export function isFlowFile(value: unknown): value is FlowFile {

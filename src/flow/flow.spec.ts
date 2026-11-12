@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { fakeOpContext } from '../crud/testing/op-test.js';
 import { FlowDb, type FlowAccess, type Row } from './flow-db.js';
 import { defineStepKind, type FlowStep } from './kinds.js';
-import { flow, runFlow } from './flow.js';
+import { beforeFlow, checkFlow, flow, runFlow } from './flow.js';
 
 /** In-memory tables for flows: enough to see what the steps read and write. */
 class MemoryDb extends FlowDb {
@@ -162,41 +162,40 @@ describe('flows: step files as data', () => {
     expect(db.accessLog).toEqual(['count:Charge:system', 'count:Used:system', 'findOne:Branch:caller', 'findOne:Branch:system']);
   });
 
-  it('an operation flow.ts groups steps by phase; each phase binds its own list', async () => {
-    const file = flow({
-      check: [{ kind: 'require', fields: ['name'] }],
-      before: [{ kind: 'set', values: { code: "upper(data.name)" } }],
-    });
-    expect(file.phases()).toEqual(['check', 'before']);
+  it('typed per phase: checkFlow / beforeFlow / afterFlow, and the file name must agree', async () => {
+    const check = checkFlow({ steps: [{ kind: 'require', fields: ['name'] }] });
+    const before = beforeFlow({ steps: [{ kind: 'set', values: { code: 'upper(data.name)' } }] });
     const c = ctx(new MemoryDb(), { dto: { name: 'frt' }, row: {} });
-    await runFlow(file, 'check', c);
-    await runFlow(file, 'before', c);
+    await runFlow(check, 'check', c);
+    await runFlow(before, 'before', c);
     expect(c.issues.failed).toBe(false);
     expect(c.row).toEqual({ code: 'FRT' });
-    expect(() => file.bindPhase('after', { file: 'flow.ts', op: 'save' })).toThrow(/no after steps/);
-    expect(() => flow({ steps: [], check: [] })).toThrow(/either `steps`/);
-    expect(() => flow({})).toThrow(/needs `steps`/);
-    // @ts-expect-error `set` changes the record: the compiler refuses it under `check`; boot does too.
-    expect(() => flow({ check: [{ kind: 'set', values: {} }] }).bindPhase('check', { file: 'flow.ts', op: 'save' })).toThrow(/check\[0\]: "set" runs in before/);
+    expect(() => check.bindPhase('before', { file: '410-before-x.ts', op: 'save' })).toThrow(/this is a check flow \(checkFlow\) but the file name says before/);
+    // @ts-expect-error `set` changes the record: checkFlow does not accept it
+    expect(() => checkFlow({ steps: [{ kind: 'set', values: {} }] }).bindPhase('check', { file: '010-check-x.ts', op: 'save' })).toThrow(/steps\[0\]: "set" runs in before/);
+    // @ts-expect-error a write does not compile in a check flow
+    checkFlow({ steps: [{ kind: 'create', model: 'X', values: {} }] });
+    expect(() => flow({} as never)).toThrow(/needs `steps`/);
   });
 
-  it('names fields of the model: typed with flow<Model>, checked against the model at boot', () => {
+  it('names fields of the model: typed with checkFlow<Model>, checked against the model at boot', () => {
     interface Charge {
       id: number;
       name: string;
       defaultValue: number;
     }
-    flow<Charge>({ check: [{ kind: 'unique', fields: ['name'] }], before: [{ kind: 'set', values: { defaultValue: 'round(row.defaultValue, 2)' } }] });
+    checkFlow<Charge>({ steps: [{ kind: 'unique', fields: ['name'] }] });
+    beforeFlow<Charge>({ steps: [{ kind: 'set', values: { defaultValue: 'round(row.defaultValue, 2)' } }] });
     // @ts-expect-error a typo in a field name does not compile
-    flow<Charge>({ check: [{ kind: 'unique', fields: ['nmae'] }] });
+    checkFlow<Charge>({ steps: [{ kind: 'unique', fields: ['nmae'] }] });
     // @ts-expect-error a kind that does not exist does not compile
-    flow<Charge>({ check: [{ kind: 'uniq', fields: ['name'] }] });
+    checkFlow<Charge>({ steps: [{ kind: 'uniq', fields: ['name'] }] });
     const model = { name: 'Charge', attributes: ['id', 'name', 'defaultValue'] };
-    const bind = (file: ReturnType<typeof flow>, phase: 'check' | 'before') => () => file.bindPhase(phase, { file: 'flow.ts', op: 'save', model });
-    expect(bind(flow({ check: [{ kind: 'unique', fields: ['nmae'] }] }), 'check')).toThrow(/check\[0\]: Charge has no field "nmae"/);
-    expect(bind(flow({ check: [{ kind: 'block', when: 'row.defualtValue < 0', message: 'x' }] }), 'check')).toThrow(/Charge has no field "defualtValue"/);
-    expect(bind(flow({ before: [{ kind: 'set', values: { colour: "'red'" } }] }), 'before')).toThrow(/Charge has no field "colour"/);
-    expect(bind(flow({ check: [{ kind: 'block', when: 'row.defaultValue < 0 and data.anything = 1', message: 'x' }] }), 'check')).not.toThrow();
+    const bind = (file: ReturnType<typeof flow>, phase: 'check' | 'before') => () => file.bindPhase(phase, { file: '010-check-x.ts', op: 'save', model });
+    expect(bind(flow({ steps: [{ kind: 'unique', fields: ['nmae'] }] }), 'check')).toThrow(/steps\[0\]: Charge has no field "nmae"/);
+    expect(bind(flow({ steps: [{ kind: 'block', when: 'row.defualtValue < 0', message: 'x' }] }), 'check')).toThrow(/Charge has no field "defualtValue"/);
+    expect(bind(flow({ steps: [{ kind: 'set', values: { colour: "'red'" } }] }), 'before')).toThrow(/Charge has no field "colour"/);
+    expect(bind(flow({ steps: [{ kind: 'block', when: 'row.defaultValue < 0 and data.anything = 1', message: 'x' }] }), 'check')).not.toThrow();
   });
 
   it('describes itself for the flow document', () => {

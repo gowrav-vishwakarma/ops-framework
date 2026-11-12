@@ -48,7 +48,7 @@ ops/deactivate/010-check-assess-open-work.ts
 - `500-execute.ts` (or `500-execute-<name>.ts`) — always number 500, at most one per operation. Replaces the main change. See below.
 - `NNN-after-name.ts` — 501 to 999. The main change is done, still inside the transaction.
 - The number is the only order. There is no priority field. In the IDE file tree the folder reads top to bottom in run order: checks, befores, `500-execute.ts`, afters.
-- `flow.ts` holds the operation's data steps by phase (see *Flows*). `_state.ts` and `_shared/` are helpers. The loader ignores other files that do not start with a number.
+- A step file may be a flow (data) or code (see *Flows*). `_state.ts` and `_shared/` are helpers. The loader ignores other files that do not start with a number.
 
 A step is the default export. A plain object needs nothing injected:
 
@@ -422,17 +422,15 @@ A refusal is a blocker (422). `can('period.unlock')` lets a guard give way to a 
 
 ## Flows: step files written as data
 
-An operation's rules as data go in one file, `ops/<op>/flow.ts`, grouped by phase. Each phase's list runs at the start of that phase, before the numbered files of the phase (a `save/` or `list/` flow before the operation's own), so checks still collect their issues together and befores still run only after every check passed:
+A flow is a step file written as data. It is numbered like every step file (`ops/<op>/NNN-<phase>-<name>.ts`), so flows and code steps interleave in any order; the number band keeps checks before writes. `checkFlow` / `beforeFlow` / `afterFlow` type the steps for their phase (a write in a `checkFlow` does not compile) and the loader checks that the helper matches the file name; plain `flow({ steps })` takes any steps. Every flow is checked when the app boots (kinds, phases, expressions, fields, methods); a mistake fails boot with the file and step position. An unnumbered `flow.ts` fails boot.
 
 ```ts
-// ops/save/flow.ts
-export default flow({
-  check: [{ kind: 'unique', fields: ['name'], message: 'The name must be unique.' }],
-  before: [{ kind: 'normalizeDecimals', rate: ['defaultValue'] }],
-});
-```
+// ops/save/010-check-unique-name.ts
+export default checkFlow<Charge>({ steps: [{ kind: 'unique', fields: ['name'], message: 'The name must be unique.' }] });
 
-A numbered step file can also default-export `flow({ steps: [...] })` instead of `step({...})`, to put data steps at an exact place between code steps (the phase comes from the file name). Every flow is checked when the app boots (kinds, phases, expressions, methods); a mistake fails boot with the file and step position.
+// ops/save/410-before-normalize-decimals.ts
+export default beforeFlow<Charge>({ steps: [{ kind: 'normalizeDecimals', rate: ['defaultValue'] }] });
+```
 
 ```ts
 
@@ -460,14 +458,14 @@ Two languages, kept apart:
   }
   ```
 
-**Mistakes are caught early.** Write `flow<Charge>({...})`:
+**Mistakes are caught early.** Write `checkFlow<Charge>({...})` (or `beforeFlow` / `afterFlow`):
 
-- the compiler: `kind` is a union of the registered kinds (autocomplete, typos do not compile); `check`, `before` and `after` accept only the kinds allowed in that phase (`FlowKindPhases`: `set` and `normalizeDecimals` under `check` do not compile); field arguments typed `Field<M>` (`unique.fields`, `set` keys, `normalizeDecimals.rate`) accept only the model's attributes (`'defaultValu'`: "did you mean 'defaultValue'?");
+- the compiler: `kind` is a union of the registered kinds (autocomplete, typos do not compile); `checkFlow` / `beforeFlow` / `afterFlow` accept only the kinds allowed in that phase (`FlowKindPhases`: `set` or `normalizeDecimals` in a `checkFlow` do not compile); field arguments typed `Field<M>` (`unique.fields`, `set` keys, `normalizeDecimals.rate`) accept only the model's attributes (`'defaultValu'`: "did you mean 'defaultValue'?");
 - the boot: the same rules again, plus `row.x` / `before.x` inside expressions and every kind's `fields` against the real model's attributes, and expressions parsed. Expressions stay text (names under `data` come from the body and are not checked).
 
 **Data access in flows is never wider than the operation.** Data steps go through `FlowDb` (no raw SQL): the tenant is always pinned by the models; the caller's data scope (branch, own, the branches a grant names) limits every `lookup`, `find`, `create`, `update`, `destroy` and `syncChildren` (creating or moving a row outside the scope is refused) unless the step says `asSystem: true`, which the flow document shows; the row guards of the model written always run. `unique` and `notReferenced` count across the whole tenant (an integrity rule must see every row) and return no data. A write touching more than 5,000 rows is refused, never truncated.
 
-Test a flow without a database: `runFlow(file, 'check', fakeOpContext({ dto, row, services: [[FlowDb, fakeDb]] }))` (each phase of a `flow.ts` separately).
+Test a flow without a database: `runFlow(file, 'check', fakeOpContext({ dto, row, services: [[FlowDb, fakeDb]] }))` .
 
 ## Seeing it
 

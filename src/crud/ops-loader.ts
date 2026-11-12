@@ -1,7 +1,7 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { isFlowFile, type FlowFile, type FlowPlace } from '../flow/flow.js';
+import { isFlowFile, type FlowPlace } from '../flow/flow.js';
 import type { Type } from '@nestjs/common';
 import type { ModuleRef } from '@nestjs/core';
 import { PHASE_BANDS, type Phase } from './op-context.js';
@@ -123,31 +123,6 @@ async function loadDefault(root: string, file: string, moduleRef: ModuleRef, wha
   return typeof exported === 'function' ? moduleRef.create(exported as Type<object>) : (exported as object);
 }
 
-/** Folders whose steps also run for other folders (`save` for create/update, `list` for every list view). */
-const SHARED_FOLDERS = new Set(['save', 'list']);
-
-/**
- * `ops/<op>/flow.ts`: the operation's rules as data, grouped by phase. Each phase's steps run at the
- * start of that phase, before its numbered files; a shared folder's flow (`save`, `list`) before the
- * operation's own.
- */
-async function loadOperationFlow(root: string, folder: string, file: string, moduleRef: ModuleRef, model?: FlowPlace['model']): Promise<LoadedStep[]> {
-  const impl = await loadDefault(root, file, moduleRef, 'flow({ check, before, after })');
-  if (!isFlowFile(impl)) fail(root, file, 'flow.ts must `export default flow({ check, before, after })`');
-  const flowFile = impl as FlowFile;
-  if (flowFile.definition.steps) fail(root, file, 'flow.ts groups its steps by phase: flow({ check: [...], before: [...], after: [...] }); `steps` belong in a numbered file');
-  return flowFile.phases().map((phase) => {
-    let bound: LoadedStep['impl'];
-    try {
-      bound = flowFile.bindPhase(phase, { file, op: folder, model }) as unknown as LoadedStep['impl'];
-    } catch (error) {
-      fail(root, file, error instanceof Error ? error.message : String(error));
-    }
-    const number = PHASE_BANDS[phase][0] - (SHARED_FOLDERS.has(folder) ? 0.75 : 0.5);
-    return { file: file.replace(/\.js$/, '.ts'), number, phase, impl: bound! };
-  });
-}
-
 async function loadFolder(root: string, folder: string, moduleRef: ModuleRef, model?: FlowPlace['model']): Promise<{ steps: LoadedStep[]; execute?: LoadedExecute }> {
   const steps: LoadedStep[] = [];
   const byNumber = new Map<number, string>();
@@ -164,8 +139,7 @@ async function loadFolder(root: string, folder: string, moduleRef: ModuleRef, mo
       continue;
     }
     if (!entry.isDirectory() && (name === 'flow.ts' || name === 'flow.js')) {
-      steps.push(...(await loadOperationFlow(root, folder, `${folder}/${name}`, moduleRef, model)));
-      continue;
+      fail(root, `${folder}/${name}`, 'flows are numbered like every step file: NNN-check|before|after-<name>.ts with checkFlow / beforeFlow / afterFlow');
     }
     if (entry.isDirectory() || !/^\d/.test(name) || name.endsWith('.d.ts') || !/\.(?:js|ts)$/.test(name)) continue;
     const file = `${folder}/${name}`;

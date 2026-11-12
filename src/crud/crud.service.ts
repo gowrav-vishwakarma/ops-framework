@@ -34,6 +34,7 @@ import { loadOps, OpsRegistry, sourceOf, type LoadedExecute, type LoadedStep } f
 import { permissionCode } from '../acl/permission-code.js';
 import { limitsFor, runBuiltInChecks, startStateReason, type BuiltInChecks } from './row-checks.js';
 import { guardsFor, RowGuardRegistry, type RowGuard } from './row-guard.js';
+import { runAsOperation, type OperationAccess } from './write-guard.js';
 
 export type { Attrs, EntityFlow };
 
@@ -728,13 +729,26 @@ export abstract class CrudService<
     main: () => Promise<unknown>,
     options: { failMessage?: string; builtIn?: BuiltInChecks<M> } = {},
   ): Promise<void> {
-    if (options.builtIn) await runBuiltInChecks(c as unknown as OpContext<M, Attrs, unknown, U>, options.builtIn);
-    await this.runPhase(c, 'check');
-    c.issues.throwIfFailed(options.failMessage);
-    c.issues.throwIfUnconfirmed(confirmed);
-    await this.runPhase(c, 'before');
-    await this.runMain(c, main);
-    await this.runPhase(c, 'after');
+    // Every write while the steps run (the main change, flows, code, services they call) passes the
+    // row guards of the model written and stays inside the caller's scope (see write-guard.ts).
+    const applied = options.builtIn?.guards ?? this.guards;
+    const access: OperationAccess = {
+      ctx: c.ctx as ReqCtx<Actor>,
+      can: async (code) => (await c.can(code)) !== null,
+      model: this.model.name,
+      scopeEnv: { partyFields: this.partyFields },
+      scope: this.scopeMap.get(c.ctx.scope) as ScopeDef | undefined,
+      skipGuards: this.guards.filter((guard) => !applied.includes(guard)).map((guard) => guard.id),
+    };
+    await runAsOperation(access, async () => {
+      if (options.builtIn) await runBuiltInChecks(c as unknown as OpContext<M, Attrs, unknown, U>, options.builtIn);
+      await this.runPhase(c, 'check');
+      c.issues.throwIfFailed(options.failMessage);
+      c.issues.throwIfUnconfirmed(confirmed);
+      await this.runPhase(c, 'before');
+      await this.runMain(c, main);
+      await this.runPhase(c, 'after');
+    });
   }
 
   /** The built-in main change, or the operation's `500-execute.ts` with that change as `original`. */

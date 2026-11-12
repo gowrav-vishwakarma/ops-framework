@@ -1,3 +1,4 @@
+import { installWriteGuardHooks } from '../crud/write-guard.js';
 import { InternalServerErrorException, Logger } from '@nestjs/common';
 import { Op, type ModelStatic, type WhereOptions } from 'sequelize';
 import type { Model, Sequelize } from 'sequelize-typescript';
@@ -61,6 +62,7 @@ export function bindTenantModels(primary: Sequelize, control: () => Sequelize): 
       set: refuse(model.name, '_schema'),
     });
     if (PARTITION.field in model.getAttributes() && !PARTITION.exempt.includes(model.name)) installPartitionHooks(model);
+    installWriteGuardHooks(model as never);
   }
   logger.log(`Bound ${Object.keys(primary.models).length} models`);
 }

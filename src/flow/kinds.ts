@@ -30,8 +30,10 @@ export type Field<M> = unknown extends M ? string : M extends Model ? Exclude<Ex
 
 /** What every step may carry besides its kind's arguments. */
 export interface StepCommon {
-  /** Runs the step only when this expression is true. */
+  /** Runs the step only when this expression is true (null, as for a missing value, is not true). */
   when?: string;
+  /** Skips the step when this expression is true; runs it otherwise, also when the value is missing. */
+  unless?: string;
   /** One line for the flow document, instead of the kind's own description. */
   describe?: string;
 }
@@ -60,6 +62,8 @@ export interface StepKind<A = Record<string, unknown>> {
   expressions?(args: A): string[];
   /** Attributes of the operation's model the arguments name, checked against the model at boot. */
   fields?(args: A): string[];
+  /** Names the step gives a value besides `as`/`missing`/`into` (an item name inside its own arguments). */
+  names?(args: A): string[];
   /** Nested step lists (`if`, `forEach`), checked with the same phase and target. */
   children?(args: A): FlowStep[][];
   /** Extra checks of the arguments; return a message to fail boot. */
@@ -71,12 +75,28 @@ export interface StepKind<A = Record<string, unknown>> {
 
 const KINDS = new Map<string, StepKind<never>>();
 
-/** Registers a step kind (built-in or the project's). Names are unique. */
-export function defineStepKind<K extends keyof FlowStepKinds>(kind: StepKind<FlowStepKinds[K]> & { name: K }): void;
-export function defineStepKind(kind: StepKind<never>): void;
-export function defineStepKind(kind: StepKind<never>): void {
+/** One step of kind `K` for a flow on model `M`. */
+export type StepOf<K extends keyof FlowStepKinds, M = any> = { kind: K } & StepCommon & FlowStepKinds<M>[K];
+
+/**
+ * What `defineStepKind` returns: the step written as a call, `financialYearOpen({ dates: [...] })`,
+ * so the editor goes from a flow to the kind's code (Ctrl+click) and checks the arguments.
+ */
+export type StepBuilder<K extends keyof FlowStepKinds> = <M = any>(
+  ...args: Record<string, never> extends FlowStepKinds<M>[K] ? [args?: StepCommon & FlowStepKinds<M>[K]] : [args: StepCommon & FlowStepKinds<M>[K]]
+) => StepOf<K, M>;
+
+/**
+ * Registers a step kind (built-in or the project's; names are unique) and returns its builder.
+ * Export the builder where the kind is defined and write flow steps with it:
+ * `export const financialYearOpen = defineStepKind({ name: 'financialYearOpen', ... })`.
+ */
+export function defineStepKind<K extends keyof FlowStepKinds>(kind: StepKind<FlowStepKinds[K]> & { name: K }): StepBuilder<K>;
+export function defineStepKind(kind: StepKind<never>): (args: Record<string, unknown>) => FlowStep;
+export function defineStepKind(kind: StepKind<never>): (args: Record<string, unknown>) => FlowStep {
   if (KINDS.has(kind.name)) throw new Error(`Step kind "${kind.name}" is already defined`);
   KINDS.set(kind.name, kind);
+  return (args = {}) => ({ ...args, kind: kind.name }) as FlowStep;
 }
 
 export function stepKind(name: string): StepKind<Record<string, unknown>> | undefined {

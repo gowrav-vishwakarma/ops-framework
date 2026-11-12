@@ -33,8 +33,28 @@ export interface FlowFile {
 
 const targetOf = (op: string): Exclude<StepTarget, 'any'> => (op === 'list' || op.startsWith('list-') ? 'list' : 'row');
 
+/** Names expressions may always read. */
+const ROOTS = new Set(['data', 'row', 'before', 'user', 'state', 'op', 'failed']);
+
+/** Every name the steps give a value (`as`, `missing`, `into`, `let` keys), nested lists included. */
+export function declaredNames(steps: readonly FlowStep[]): Set<string> {
+  const names = new Set<string>();
+  const visit = (list: readonly FlowStep[]) => {
+    for (const step of list) {
+      const args = step as unknown as Record<string, unknown>;
+      for (const key of ['as', 'missing', 'into']) if (typeof args[key] === 'string') names.add(args[key] as string);
+      if (args.kind === 'let' && args.values && typeof args.values === 'object') for (const key of Object.keys(args.values)) names.add(key);
+      const kind = stepKind(String(args.kind));
+      for (const name of kind?.names?.(args as never) ?? []) names.add(name);
+      for (const nested of kind?.children?.(args as never) ?? []) visit(nested);
+    }
+  };
+  visit(steps);
+  return names;
+}
+
 /** Checks a step list for a phase and target; returns the description lines. Throws with the step's position. */
-function check(steps: readonly FlowStep[], phase: Phase, target: Exclude<StepTarget, 'any'>, methods: Record<string, FlowMethod>, path: string, model?: FlowPlace['model']): string[] {
+function check(steps: readonly FlowStep[], phase: Phase, target: Exclude<StepTarget, 'any'>, methods: Record<string, FlowMethod>, path: string, model?: FlowPlace['model'], declared: Set<string> = declaredNames(steps)): string[] {
   const known = model ? new Set(model.attributes) : null;
   const field = (at: string, name: string, where: string) => {
     if (known && !known.has(name)) throw new Error(`${at}: ${model!.name} has no field "${name}" (${where})`);
@@ -42,14 +62,15 @@ function check(steps: readonly FlowStep[], phase: Phase, target: Exclude<StepTar
   if (!Array.isArray(steps)) throw new Error(`${path}: steps must be a list`);
   return steps.flatMap((step, index) => {
     const at = `${path}[${index}]`;
-    const { kind: name, when, describe } = step as { kind: string; when?: unknown; describe?: string };
+    const { kind: name, when, unless, describe } = step as { kind: string; when?: unknown; unless?: unknown; describe?: string };
     const kind = stepKind(name);
     if (!kind) throw new Error(`${at}: unknown step kind "${name}"`);
     if (kind.phases && !kind.phases.includes(phase)) throw new Error(`${at}: "${name}" runs in ${kind.phases.join(' or ')} steps, not ${phase}`);
     if (kind.target && kind.target !== 'any' && kind.target !== target) throw new Error(`${at}: "${name}" works on ${kind.target === 'list' ? 'lists' : 'records'}`);
     if (when !== undefined && typeof when !== 'string') throw new Error(`${at}: when is an expression (text)`);
+    if (unless !== undefined && typeof unless !== 'string') throw new Error(`${at}: unless is an expression (text)`);
     const args = step as unknown as Record<string, unknown>;
-    for (const expr of [...(when ? [when] : []), ...(kind.expressions?.(args) ?? [])]) {
+    for (const expr of [...(when ? [when] : []), ...(unless ? [unless] : []), ...(kind.expressions?.(args) ?? [])]) {
       if (typeof expr !== 'string') continue;
       let compiled;
       try {
@@ -57,9 +78,11 @@ function check(steps: readonly FlowStep[], phase: Phase, target: Exclude<StepTar
       } catch (error) {
         throw new Error(`${at}: "${expr}": ${error instanceof Error ? error.message : String(error)}`);
       }
-      // `row.x` and `before.x` read the operation's record: x must be one of its fields.
+      // `row.x` and `before.x` read the operation's record: x must be one of its fields; any other
+      // name must be one the flow always has or one a step gives a value.
       for (const name of expressionNames(compiled.ast)) {
         const [root, attribute] = name.split('.');
+        if (!ROOTS.has(root!) && !declared.has(root!)) throw new Error(`${at}: "${expr}": unknown name "${root}" (names: ${[...ROOTS, ...declared].join(', ')})`);
         if ((root === 'row' || root === 'before') && attribute) field(at, attribute, `"${expr}"`);
       }
     }
@@ -67,8 +90,8 @@ function check(steps: readonly FlowStep[], phase: Phase, target: Exclude<StepTar
     const problem = kind.validate?.(args);
     if (problem) throw new Error(`${at}: ${problem}`);
     if (name === 'call' && typeof args.method === 'string' && !methods[args.method]) throw new Error(`${at}: no method "${args.method}" in this flow`);
-    const line = `${describe ?? kind.describe(args)}${when ? ` (when ${when})` : ''}`;
-    const nested = (kind.children?.(args) ?? []).flatMap((list, n) => check(list, phase, target, methods, `${at}.${n}`, model).map((child) => `  ${child}`));
+    const line = `${describe ?? kind.describe(args)}${when ? ` (when ${when})` : ''}${unless ? ` (unless ${unless})` : ''}`;
+    const nested = (kind.children?.(args) ?? []).flatMap((list, n) => check(list, phase, target, methods, `${at}.${n}`, model, declared).map((child) => `  ${child}`));
     return [line, ...nested];
   });
 }
@@ -101,8 +124,9 @@ export function flow<M = unknown>(definition: FlowDefinition<M>): FlowFile {
         throw new Error(`this is a ${definition.phase} flow (${definition.phase}Flow) but the file name says ${phase}: rename the file or change the helper`);
       }
       const lines = check(steps as FlowStep[], phase, targetOf(place.op), methods, 'steps', place.model);
+      const declared = declaredNames(steps as FlowStep[]);
       const run = async (c: FlowContext) => {
-        await new FlowRun(c, phase, place.file, methods).steps(steps as FlowStep[]);
+        await new FlowRun(c, phase, place.file, methods, declared).steps(steps as FlowStep[]);
       };
       return { describe: definition.describe ?? lines.join('; '), [phase]: run };
     },

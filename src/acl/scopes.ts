@@ -19,6 +19,23 @@ export interface ScopeDef<M extends Model = Model, U extends Actor = AuthUser> {
   where(ctx: ReqCtx<U>, model: ModelStatic<M>, env: ScopeEnv): WhereOptions | null;
   /** The same rule for one loaded row (`_actions`, checks), without a query. */
   allows?(ctx: ReqCtx<U>, row: M, env: ScopeEnv): boolean;
+  /**
+   * The scope splits data along a dimension rows of other models carry too (a branch): inside an
+   * operation, reads and writes of those related rows stay within it. Ownership (`own`) is not
+   * related: it limits the operation's own records only.
+   */
+  related?: boolean;
+}
+
+/**
+ * The row rule a write must pass under `scope`, or null when the scope does not reach `model`:
+ * the operation's own model gets the whole scope, another model only a `related` scope it has the
+ * fields of.
+ */
+export function scopeWriteRule<M extends Model, U extends Actor>(scope: ScopeDef<M, U> | undefined, ctx: ReqCtx<U>, model: ModelStatic<M>, own: boolean, env: ScopeEnv): ((row: M) => boolean) | null {
+  if (!scope || (!own && !scope.related)) return null;
+  if (scope.where(ctx, model, env) === null) return null;
+  return scope.allows ? (row) => scope.allows!(ctx, row, env) : null;
 }
 
 /** A scope by id (built-in or registered by the app) or declared in place. */
@@ -31,6 +48,7 @@ export const allScope: ScopeDef<Model, Actor> = { id: 'all', label: 'All records
 export const branchScope: ScopeDef = {
   id: 'branch',
   label: 'Own branches',
+  related: true,
   where: (ctx, model) => ('branchId' in model.getAttributes() ? ({ branchId: { [Op.in]: branchIds(ctx) } } as WhereOptions) : null),
   allows: (ctx, row) => {
     const branch = row.get('branchId') as number | null | undefined;

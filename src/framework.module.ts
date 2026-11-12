@@ -37,6 +37,7 @@ import {
 import { FlowDb, SequelizeFlowDb } from './flow/flow-db.js';
 import { ScopeRegistry } from './acl/scope-registry.js';
 import { RowGuardRegistry } from './crud/row-guard.js';
+import { WriteGuard } from './crud/write-guard.js';
 import { FrameworkBoot } from './framework-boot.service.js';
 import { RequestLogMiddleware } from './logging/request-log.js';
 import { MigrationFiles } from './migrations/migration-files.js';
@@ -94,6 +95,7 @@ const CORE: Provider[] = [
   FrameworkBoot,
   ScopeRegistry,
   RowGuardRegistry,
+  WriteGuard,
   { provide: FlowDb, useClass: SequelizeFlowDb },
 ];
 

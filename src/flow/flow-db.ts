@@ -7,6 +7,7 @@ import type { Actor, ReqCtx } from '../auth/auth-user.js';
 import { preparedFor, RowGuardRegistry } from '../crud/row-guard.js';
 import { currentTenant } from '../tenancy/context.js';
 import { sequelizeOf } from '../tenancy/guards.js';
+import { asSystem, operationAccess } from '../crud/write-guard.js';
 
 export type Row = Record<string, unknown>;
 
@@ -35,6 +36,8 @@ export abstract class FlowDb {
   abstract findAll(t: Transaction, access: FlowAccess, model: string, where: Row, options?: { attributes?: string[]; limit?: number }): Promise<Row[]>;
   abstract count(t: Transaction, access: FlowAccess, model: string, where: WhereOptions): Promise<number>;
   abstract create(t: Transaction, access: FlowAccess, model: string, values: Row): Promise<Row>;
+  /** Many new rows in one insert; the saved rows come back in the same order. */
+  abstract createMany(t: Transaction, access: FlowAccess, model: string, rows: Row[]): Promise<Row[]>;
   abstract update(t: Transaction, access: FlowAccess, model: string, values: Row, where: Row): Promise<number>;
   abstract destroy(t: Transaction, access: FlowAccess, model: string, where: Row): Promise<number>;
 }
@@ -73,10 +76,14 @@ export class SequelizeFlowDb extends FlowDb {
     }
   }
 
-  /** `where` limited to the caller's scope on this model (unless the step acts as the system). */
+  /**
+   * `where` limited to the caller's scope on this model (unless the step acts as the system):
+   * inside an operation, the operation's own model by the whole scope, other models by a related
+   * (branch) scope only, the same rule writes follow.
+   */
   private scoped(access: FlowAccess, model: ModelCtor<Model>, where: WhereOptions): WhereOptions {
     if (access.system) return where;
-    const scope = this.scopes.where(access.ctx as ReqCtx, model);
+    const scope = this.scopes.where(access.ctx as ReqCtx, model, operationAccess()?.model);
     return scope ? ({ [Op.and]: [where, scope] } as WhereOptions) : where;
   }
 
@@ -106,36 +113,66 @@ export class SequelizeFlowDb extends FlowDb {
     return m.count({ where: this.scoped(access, m, where), transaction: t });
   }
 
+  /**
+   * Writes: inside an operation the write guard (model hooks) checks the scope and the row guards
+   * of every row, as for any write; outside one (a flow run in a test or a job) they are checked here.
+   */
+  private write<T>(access: FlowAccess, work: () => Promise<T>): Promise<T> {
+    return access.system ? asSystem(work) : work();
+  }
+
+  private inOperation(): boolean {
+    return operationAccess() !== undefined;
+  }
+
   async create(t: Transaction, access: FlowAccess, model: string, values: Row): Promise<Row> {
     const m = this.model(model, t);
     const row = m.build(values as never);
-    // A new row must fall inside the caller's scope: a branch-limited user cannot create for another branch.
-    if (!access.system) this.assertInScope(access, m, row.get({ plain: true }) as Row);
-    await this.guard(t, access, model, 'create', row, null);
-    return (await row.save({ transaction: t })).get({ plain: true }) as Row;
+    if (!this.inOperation()) {
+      // A new row must fall inside the caller's scope: a branch-limited user cannot create for another branch.
+      if (!access.system) this.assertInScope(access, m, row.get({ plain: true }) as Row);
+      await this.guard(t, access, model, 'create', row, null);
+    }
+    return (await this.write(access, () => row.save({ transaction: t }))).get({ plain: true }) as Row;
+  }
+
+  async createMany(t: Transaction, access: FlowAccess, model: string, rows: Row[]): Promise<Row[]> {
+    if (rows.length > FLOW_ROW_LIMIT) throw new InternalServerErrorException(`Flow: an insert into ${model} of more than ${FLOW_ROW_LIMIT} rows`);
+    const m = this.model(model, t);
+    if (!this.inOperation()) {
+      for (const values of rows) {
+        const row = m.build(values as never);
+        if (!access.system) this.assertInScope(access, m, row.get({ plain: true }) as Row);
+        await this.guard(t, access, model, 'create', row, null);
+      }
+    }
+    const saved = await this.write(access, () => m.bulkCreate(rows as never[], { transaction: t, returning: true }));
+    return saved.map((row) => row.get({ plain: true }) as Row);
   }
 
   async update(t: Transaction, access: FlowAccess, model: string, values: Row, where: Row): Promise<number> {
     const m = this.model(model, t);
     const rows = await this.affected(t, access, m, where);
-    for (const before of rows) {
-      const after = { ...before, ...values };
-      // Moving a row out of the caller's scope (to another branch) is refused like creating it there.
-      if (!access.system) this.assertInScope(access, m, after);
-      await this.guard(t, access, model, 'update', asRow(after), before);
+    if (!this.inOperation()) {
+      for (const before of rows) {
+        const after = { ...before, ...values };
+        // Moving a row out of the caller's scope (to another branch) is refused like creating it there.
+        if (!access.system) this.assertInScope(access, m, after);
+        await this.guard(t, access, model, 'update', asRow(after), before);
+      }
     }
     if (!rows.length) return 0;
-    // Instance hooks (audit, partition) run per row, as for any write through the models.
-    const [count] = await m.update(values as never, { where: { id: { [Op.in]: rows.map((r) => r.id) } } as WhereOptions, transaction: t, individualHooks: true });
+    // Instance hooks (write guard, audit, partition) run per row, as for any write through the models.
+    const [count] = await this.write(access, () => m.update(values as never, { where: { id: { [Op.in]: rows.map((r) => r.id) } } as WhereOptions, transaction: t, individualHooks: true }));
     return count;
   }
 
   async destroy(t: Transaction, access: FlowAccess, model: string, where: Row): Promise<number> {
     const m = this.model(model, t);
     const rows = await this.affected(t, access, m, where);
-    for (const before of rows) await this.guard(t, access, model, 'delete', asRow(before), before);
+    if (!this.inOperation()) for (const before of rows) await this.guard(t, access, model, 'delete', asRow(before), before);
     if (!rows.length) return 0;
-    return m.destroy({ where: { id: { [Op.in]: rows.map((r) => r.id) } } as WhereOptions, transaction: t, individualHooks: true });
+    return this.write(access, () => m.destroy({ where: { id: { [Op.in]: rows.map((r) => r.id) } } as WhereOptions, transaction: t, individualHooks: true }));
   }
 
   /** The rows a write would touch, inside the scope; more than the cap is refused, never truncated. */

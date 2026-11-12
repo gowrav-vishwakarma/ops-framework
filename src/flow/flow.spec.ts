@@ -3,6 +3,7 @@ import { fakeOpContext } from '../crud/testing/op-test.js';
 import { FlowDb, type FlowAccess, type Row } from './flow-db.js';
 import { defineStepKind, type FlowStep } from './kinds.js';
 import { beforeFlow, checkFlow, flow, runFlow } from './flow.js';
+import { Flow } from './builtin-kinds.js';
 
 /** In-memory tables for flows: enough to see what the steps read and write. */
 class MemoryDb extends FlowDb {
@@ -31,6 +32,7 @@ class MemoryDb extends FlowDb {
     (this.tables[model] ??= []).push(row);
     return row;
   };
+  createMany = async (t: unknown, access: FlowAccess, model: string, rows: Row[]) => Promise.all(rows.map((row) => this.create(t, access, model, row)));
   update = async (_t: unknown, access: FlowAccess, model: string, values: Row, where: Row) => { this.log('update', model, access); 
     const rows = (this.tables[model] ?? []).filter((r) => this.match(r, where));
     rows.forEach((r) => Object.assign(r, values));
@@ -201,5 +203,46 @@ describe('flows: step files as data', () => {
   it('describes itself for the flow document', () => {
     const bound = flow({ steps: [{ kind: 'require', fields: ['name'] }, { kind: 'unique', fields: ['name'], caseInsensitive: true, when: 'data.name is not empty' }] }).bindPhase('check', { file: 'x', op: 'save' });
     expect(bound.describe).toBe('require name; unique name (any case) (when data.name is not empty)');
+  });
+
+  it('match splits values into the rows a model has and the values it has not; createMany inserts one per item; assign writes the request', async () => {
+    const db = new MemoryDb({ SerialNumber: [{ id: 1, serialNumber: 'A1', status: 'in' }, { id: 2, serialNumber: 'B2', status: 'out' }] });
+    db.findAll = async (_t, _a, model, where) => {
+      const list = (where.serialNumber as Record<symbol, unknown[]>)[Object.getOwnPropertySymbols(where.serialNumber)[0]!]!;
+      return (db.tables[model] ?? []).filter((r) => list.includes(r.serialNumber) && (where.status === undefined || r.status === where.status));
+    };
+    const c = ctx(db, { dto: { serials: ['A1', 'B2', 'C3', 'A1'], charges: [{ name: 'Freight', amount: 10 }, { name: 'Packing', amount: 5 }] } });
+    await runFlow(
+      flow({
+        steps: [
+          { kind: 'match', model: 'SerialNumber', field: 'serialNumber', values: 'data.serials', where: { status: "'in'" }, as: 'inStock', missing: 'notInStock' },
+          { kind: 'match', model: 'SerialNumber', field: 'serialNumber', values: 'notInStock', as: 'elsewhere', missing: 'unknown' },
+          { kind: 'assign', values: { 'state.inStock': "pluck(inStock, 'serialNumber')", 'state.elsewhere': "pluck(elsewhere, 'serialNumber')", 'state.unknown': 'unknown', 'data.summary.count': 'count(data.serials)' } },
+          { kind: 'createMany', model: 'Charge', each: 'data.charges', as: 'charge', values: { name: 'charge.name', value: 'charge.amount' }, into: 'saved' },
+          { kind: 'assign', values: { 'state.savedIds': "pluck(saved, 'id')" } },
+        ],
+      }),
+      'after',
+      c,
+    );
+    expect(c.state).toMatchObject({ inStock: ['A1'], elsewhere: ['B2'], unknown: ['C3'], savedIds: [1, 2] });
+    expect((c.dto as { summary: unknown }).summary).toEqual({ count: 4 });
+    expect(db.tables.Charge).toEqual([{ id: 1, name: 'Freight', value: 10 }, { id: 2, name: 'Packing', value: 5 }]);
+    expect(() => flow({ steps: [{ kind: 'assign', values: { 'row.x': '1' } }] }).bindPhase('after', { file: 'x', op: 'create' })).toThrow(/under data or state/);
+  });
+
+  it('steps can be written with builders, so the editor jumps to the kind (Ctrl+click) and checks it', () => {
+    interface Charge {
+      id: number;
+      name: string;
+      defaultValue: number;
+    }
+    const steps = [Flow.unique({ fields: ['name'], unless: 'data.skip' }), Flow.block({ message: 'no', when: 'row.defaultValue < 0' })];
+    checkFlow<Charge>({ steps });
+    expect(steps[0]).toEqual({ kind: 'unique', fields: ['name'], unless: 'data.skip' });
+    // @ts-expect-error a typo in a field name does not compile with a builder either
+    checkFlow<Charge>({ steps: [Flow.unique({ fields: ['nmae'] })] });
+    // @ts-expect-error a write does not compile in a check flow
+    checkFlow<Charge>({ steps: [Flow.set({ values: { name: "'x'" } })] });
   });
 });

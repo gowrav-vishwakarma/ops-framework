@@ -26,6 +26,8 @@ export interface FlowContext {
   issues: { block(code: string, message: string): unknown; warn(code: string, message: string): unknown; field(name: string, message: string): unknown; throwIfFailed(message?: string): void };
   get<T>(token: unknown): T;
   afterCommit(work: () => Promise<void> | void): void;
+  /** Work in a savepoint: a failure rolls back only that work (see `OpBase.savepoint`). */
+  savepoint?<T>(work: (t: Transaction) => Promise<T>): Promise<T>;
 }
 
 /** A value of a row: a model instance (`get`) or, in tests, a plain object. */
@@ -64,6 +66,8 @@ export class FlowRun {
     readonly phase: Phase,
     readonly file: string,
     readonly methods: Record<string, FlowMethod>,
+    /** Names a step of this flow gives a value: they read as null until it does. */
+    readonly declared: ReadonlySet<string> = new Set(),
   ) {}
 
   get db(): FlowDb {
@@ -102,7 +106,10 @@ export class FlowRun {
         return this.c.state;
       case 'op':
         return this.c.op;
+      case 'failed':
+        return (this.c.issues as { failed?: boolean }).failed === true;
       default:
+        if (this.declared.has(name)) return null;
         throw new UnprocessableEntityException(`${this.file}: unknown name "${name}" in an expression`);
     }
   }
@@ -157,8 +164,8 @@ export class FlowRun {
   /** Runs a list of steps in order; `'stop'` ends the whole flow. */
   async steps(list: readonly FlowStep[]): Promise<void | 'stop'> {
     for (const step of list) {
-      const { kind: name, when } = step as { kind: string; when?: string };
-      if (!this.cond(when)) continue;
+      const { kind: name, when, unless } = step as { kind: string; when?: string; unless?: string };
+      if (!this.cond(when) || (unless !== undefined && this.cond(unless))) continue;
       const kind = stepKind(name)!;
       try {
         if ((await kind.run(this, step as never)) === 'stop') return 'stop';

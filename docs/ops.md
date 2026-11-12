@@ -412,6 +412,15 @@ export interface RowGuard<M, U> {
 
 A refusal is a blocker (422). `can('period.unlock')` lets a guard give way to a permission.
 
+### Every write of an operation is guarded (the write guard)
+
+While an operation's steps run (`create`, `update`, `delete`, actions), the framework knows who the operation writes for, and model hooks check **every** create, update and delete on a tenant model, whether a flow step, a code step or a service it calls makes it (`src/crud/write-guard.ts`):
+
+- the **row guards** of the model written (a closed year refuses a ledger row as it refuses the invoice);
+- the caller's **scope**: the operation's own records against the whole scope (`branch`, `own`, the branches a grant names); rows of other models against the scopes marked `related: true` (data split along a dimension those rows carry, such as a branch: a branch-limited user cannot take stock or post a ledger row in another branch). Ownership (`own`) is not related: a salesman limited to his own invoices still takes stock from lots others created. A bulk update or delete loads the rows it touches when a check applies, so the per-row check runs.
+
+`asSystem(() => work)` lifts the scope (never the guards) for integrity writes the system makes whatever the caller's reach; say why where you use it. Writes outside operations (sign-in, jobs, migrations) are not checked. A refusal is a 422 blocker (`out_of_scope` or the guard's code).
+
 ## Soft delete and restore
 
 `tenantTable('invoices', indexes, { softDelete: true })` makes the model paranoid, and the service sets `protected readonly softDelete = true`. Delete then sets `deleted_at`, normal reads skip the row, and the framework adds a `restore` action (permission `<resource>.restore`, which must be in the catalog). `GET /<resource>?deleted=1` lists deleted records and needs that permission. A dependent that is also soft deleted sets `paranoid: true` in `dependents` so its deleted rows do not block.
@@ -424,32 +433,34 @@ A refusal is a blocker (422). `can('period.unlock')` lets a guard give way to a 
 
 A flow is a step file written as data. It is numbered like every step file (`ops/<op>/NNN-<phase>-<name>.ts`), so flows and code steps interleave in any order; the number band keeps checks before writes. `checkFlow` / `beforeFlow` / `afterFlow` type the steps for their phase (a write in a `checkFlow` does not compile) and the loader checks that the helper matches the file name; plain `flow({ steps })` takes any steps. Every flow is checked when the app boots (kinds, phases, expressions, fields, methods); a mistake fails boot with the file and step position. An unnumbered `flow.ts` fails boot.
 
+Steps are written with **builders**: every kind is a function (`Flow.lookup(...)` for the built-ins, the project's own imported from where they are defined), so the editor checks the arguments and Ctrl+click opens the kind's code. The object form `{ kind: 'lookup', ... }` is the same step.
+
 ```ts
 // ops/save/010-check-unique-name.ts
-export default checkFlow<Charge>({ steps: [{ kind: 'unique', fields: ['name'], message: 'The name must be unique.' }] });
+export default checkFlow<Charge>({ steps: [Flow.unique({ fields: ['name'], message: 'The name must be unique.' })] });
 
-// ops/save/410-before-normalize-decimals.ts
-export default beforeFlow<Charge>({ steps: [{ kind: 'normalizeDecimals', rate: ['defaultValue'] }] });
+// ops/save/410-before-normalize-decimals.ts  (normalizeDecimals: an Ankpal kind, imported from src/flow-kinds)
+export default beforeFlow<Charge>({ steps: [normalizeDecimals({ rate: ['defaultValue'] })] });
 ```
 
-```ts
+A larger one, Ankpal's sales invoice (`tenant/SalesInvoice/ops/create/610-after-take-stock-out.ts`), reads as the business rule:
 
-// ops/save/420-before-gst-type.ts
-export default flow({
-  steps: [
-    { kind: 'lookup', model: 'Branch', where: { id: 'data.branchId' }, as: 'branch', required: 'Branch not found' },
-    { kind: 'lookup', model: 'Account', where: { id: 'data.partyId' }, as: 'party' },
-    { kind: 'if', test: 'branch.stateId = party.stateId', then: [{ kind: 'set', values: { gstType: "'CGST_SGST'" } }], else: [{ kind: 'set', values: { gstType: "'IGST'" } }] },
-  ],
-});
+```ts
+Flow.match({ model: 'SerialNumber', field: 'serialNumber', values: 'sold.serialNumbers', where: { productId: 'sold.productId', status: "'in'" }, as: 'inStock', missing: 'notInStock' }),
+Flow.match({ model: 'SerialNumber', field: 'serialNumber', values: 'notInStock', where: { productId: 'sold.productId' }, as: 'knownElsewhere', missing: 'neverSeen' }),
+Flow.forEach({ items: 'union(inStock, knownElsewhere)', as: 'serial', steps: [
+  Flow.call({ method: 'soldValues', args: { sold: 'sold', serial: 'serial' }, as: 'soldValues' }),
+  Flow.update({ model: 'SerialNumber', where: { id: 'serial.id' }, values: 'soldValues' }),
+] }),
+Flow.createMany({ model: 'SerialNumber', rows: 'newSerials', into: 'createdSerials', when: 'count(newSerials) > 0' }),
 ```
 
 Two languages, kept apart:
 
-- **Expressions** (`'data.qty * data.rate'`, `"row.status = 'active' and data.amount > 1000"`) compute values and conditions, nothing else: no data access, no control flow, never `eval`. Names: `data` (body or action input), `row`, `before`, `user`, `state`, `op`, and every `as` of an earlier step. SQL null rules; decimals that arrive as text compare as numbers; functions from a fixed list (`coalesce`, `if`, `round`, `lower`, `concat`, `date`, `fy`, `fystart`, `adddays`, `daysbetween`, `today`...) plus `defineExpressionFunction`. A string argument of a step is an expression (text literals are quoted: `"'IGST'"`); numbers, booleans and null are values.
-- **Steps** do the work: `block`, `warn`, `require`, `unique`, `notReferenced`, `lookup`, `find`, `let`, `state`, `set` (before), `create`, `update`, `destroy`, `syncChildren` (before/after), `if`, `forEach`, `stop`, `call`, and for lists `where` (before) and `decorate` (after). Every step takes `when` and `describe`. `block` in a check step joins the other issues; later it stops at once with the same 422.
-- **Code in the same file.** `methods: { split(run, args) {...} }` and `{ kind: 'call', method: 'split', args: {...}, as: 'parts' }` hold what is not repetitive.
-- **Project kinds** name the project's repeated rules so the files read as business: `defineStepKind({ name, phases, target, fields, validate, run, describe })`, typed by declaration merging:
+- **Expressions** (`'data.qty * data.rate'`, `"row.status = 'active' and data.amount > 1000"`) compute values and conditions, nothing else: no data access, no control flow, never `eval`. Names: `data` (body or action input), `row`, `before`, `user`, `state`, `op`, `failed` (a check already failed), and every name a step gives a value (`as`, `missing`, `into`, `let` keys; null until it does). Any other name fails boot. SQL null rules; decimals that arrive as text compare as numbers. Functions from a fixed list plus `defineExpressionFunction`: `coalesce`, `either` (JavaScript's `a || b`: the first that is set and not empty, zero or false), `if`, `round`, `lower`, `concat`, `number`, `date`, `fy`, `fystart`, `adddays`, `daysbetween`, `today`, `now`...; lists: `count`, `sum`, `pluck`, `distinct`, `union`, `except`, `first`, `any`, `every`, `filter`, `flatten` (a field of each item named as text: `sum(data.items, 'netTotal')`); what a value is: `istext`, `isnumber`, `islist`, `isobject`, `idof` (the id of a reference sent as an id or a record). A string argument of a step is an expression (text literals are quoted: `"'IGST'"`); numbers, booleans and null are values.
+- **Steps** do the work: `block`, `warn`, `require`, `unique`, `notReferenced`, `lookup`, `find`, `match` (the rows a model has for a list of values, and the values it has not), `let`, `state`, `assign` (values into `data.x` / `state.x`: for requests that are their own working document), `set` (before; `from: 'data'` copies every field of the model an object has), `create`, `createMany` (one insert, one row per item or from ready rows), `update`, `destroy`, `syncChildren` (before/after), `if`, `forEach`, `try` (optional work in a savepoint: a failure that is not a refusal undoes only those steps and is logged), `stop`, `call`, and for lists `where` (before) and `decorate` (after). Every step takes `when` (runs when true), `unless` (skipped when true, runs when the value is missing) and `describe`. `block` in a check step joins the other issues (`Flow.stop({ when: 'failed' })` stops at the first, as classic code did); later it stops at once with the same 422. A `lookup` or `find` whose condition names a missing value finds nothing.
+- **Code in the same file.** `methods: { split(run, args) {...} }` and `Flow.call({ method: 'split', args: {...}, as: 'parts' })` hold what is not repetitive (a column map, a calculation): a flow is the paragraph, a method a footnote.
+- **Project kinds** name the project's repeated rules so the files read as business: `export const financialYearOpen = defineStepKind({ name, phases, target, fields, names, validate, run, describe })` returns the builder; typed by declaration merging:
 
   ```ts
   declare module '@ops/framework' {
@@ -460,10 +471,10 @@ Two languages, kept apart:
 
 **Mistakes are caught early.** Write `checkFlow<Charge>({...})` (or `beforeFlow` / `afterFlow`):
 
-- the compiler: `kind` is a union of the registered kinds (autocomplete, typos do not compile); `checkFlow` / `beforeFlow` / `afterFlow` accept only the kinds allowed in that phase (`FlowKindPhases`: `set` or `normalizeDecimals` in a `checkFlow` do not compile); field arguments typed `Field<M>` (`unique.fields`, `set` keys, `normalizeDecimals.rate`) accept only the model's attributes (`'defaultValu'`: "did you mean 'defaultValue'?");
+- the compiler: builders type their arguments, and in the object form `kind` is a union of the registered kinds (autocomplete, typos do not compile); `checkFlow` / `beforeFlow` / `afterFlow` accept only the kinds allowed in that phase (`FlowKindPhases`: `set` or `normalizeDecimals` in a `checkFlow` do not compile); field arguments typed `Field<M>` (`unique.fields`, `set` keys, `normalizeDecimals.rate`) accept only the model's attributes (`'defaultValu'`: "did you mean 'defaultValue'?");
 - the boot: the same rules again, plus `row.x` / `before.x` inside expressions and every kind's `fields` against the real model's attributes, and expressions parsed. Expressions stay text (names under `data` come from the body and are not checked).
 
-**Data access in flows is never wider than the operation.** Data steps go through `FlowDb` (no raw SQL): the tenant is always pinned by the models; the caller's data scope (branch, own, the branches a grant names) limits every `lookup`, `find`, `create`, `update`, `destroy` and `syncChildren` (creating or moving a row outside the scope is refused) unless the step says `asSystem: true`, which the flow document shows; the row guards of the model written always run. `unique` and `notReferenced` count across the whole tenant (an integrity rule must see every row) and return no data. A write touching more than 5,000 rows is refused, never truncated.
+**Data access in flows is never wider than the operation.** Data steps go through `FlowDb` (no raw SQL): the tenant is always pinned by the models; the caller's data scope (branch, own, the branches a grant names) limits every `lookup`, `find`, `match`, `create`, `createMany`, `update`, `destroy` and `syncChildren` the way the write guard does (the operation's own model by the whole scope, other models by `related` scopes; creating or moving a row outside it is refused) unless the step says `asSystem: true`, which the flow document shows; the row guards of the model written always run. `unique` and `notReferenced` count across the whole tenant (an integrity rule must see every row) and return no data. A write touching more than 5,000 rows is refused, never truncated.
 
 Test a flow without a database: `runFlow(file, 'check', fakeOpContext({ dto, row, services: [[FlowDb, fakeDb]] }))` .
 

@@ -52,9 +52,26 @@ function compare(a: unknown, b: unknown): number | null {
 /** SQL truth: null stays unknown. */
 const truth = (value: unknown): boolean | null => (isNull(value) ? null : Boolean(value));
 
+/** `path` of one list item (`'qty'`, `'batch.id'`), through plain objects and model instances. */
+function pick(item: unknown, path: unknown): unknown {
+  let value = item;
+  for (const key of String(path ?? '').split('.').filter(Boolean)) {
+    if (value === null || value === undefined) return undefined;
+    const get = (value as { get?: (k: string) => unknown }).get;
+    value = typeof get === 'function' ? get.call(value, key) : (value as Record<string, unknown>)[key];
+  }
+  return value;
+}
+const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : isNull(value) ? [] : [value]);
+/** Items of a list, or the values at `path` of each item. */
+const valuesOf = (items: unknown, path?: unknown): unknown[] => (path === undefined ? list(items) : list(items).map((item) => pick(item, path)));
+const sameKey = (value: unknown) => (value instanceof Date ? value.toISOString() : String(value));
+
 const FUNCTIONS = new Map<string, ExpressionFunction>(
   Object.entries<ExpressionFunction>({
     coalesce: { min: 1, max: 12, run: (a) => a.find((v) => !isNull(v)) ?? null },
+    /** The first value that is set and not empty, zero or false (JavaScript's `a || b`), else the last. */
+    either: { min: 2, max: 12, run: (a) => a.find((v) => Boolean(v)) ?? a[a.length - 1] ?? null },
     nullif: { min: 2, max: 2, run: ([a, b]) => (compare(a, b) === 0 ? null : a) },
     if: { min: 2, max: 3, run: ([c, a, b]) => (truth(c) ? a : (b ?? null)) },
     abs: { min: 1, max: 1, run: ([a]) => (numeric(a) === null ? null : Math.abs(numeric(a)!)) },
@@ -94,6 +111,26 @@ const FUNCTIONS = new Map<string, ExpressionFunction>(
     daysbetween: { min: 2, max: 2, run: ([a, b]) => (dateOf(a) && dateOf(b) ? Math.round((dateOf(b)!.getTime() - dateOf(a)!.getTime()) / 86_400_000) : null) },
     adddays: { min: 2, max: 2, run: ([a, n]) => (dateOf(a) ? isoDay(new Date(dateOf(a)!.getTime() + (numeric(n) ?? 0) * 86_400_000)) : null) },
     today: { min: 0, max: 0, run: () => isoDay(new Date()) },
+    now: { min: 0, max: 0, run: () => new Date() },
+    // What a value is (requests often send an id or a record, a code or an object).
+    istext: { min: 1, max: 1, run: ([v]) => typeof v === 'string' },
+    isnumber: { min: 1, max: 1, run: ([v]) => typeof v === 'number' && Number.isFinite(v) },
+    islist: { min: 1, max: 1, run: ([v]) => Array.isArray(v) },
+    isobject: { min: 1, max: 1, run: ([v]) => v !== null && typeof v === 'object' && !Array.isArray(v) && !(v instanceof Date) },
+    // Lists (`data.items`, rows a step found). A `path` names a field of each item: 'qty', 'batch.id'.
+    count: { min: 1, max: 2, run: ([items, path]) => (path === undefined ? list(items).length : valuesOf(items, path).filter((v) => truth(v) === true).length) },
+    sum: { min: 1, max: 2, run: ([items, path]) => valuesOf(items, path).reduce<number>((total, v) => total + (numeric(v) ?? 0), 0) },
+    pluck: { min: 2, max: 2, run: ([items, path]) => valuesOf(items, path) },
+    distinct: { min: 1, max: 2, run: ([items, path]) => { const seen = new Set<string>(); return valuesOf(items, path).filter((v) => !isNull(v) && !seen.has(sameKey(v)) && (seen.add(sameKey(v)), true)); } },
+    flatten: { min: 1, max: 1, run: ([items]) => list(items).flatMap((v) => list(v)) },
+    union: { min: 2, max: 6, run: (lists) => lists.flatMap((v) => list(v)) },
+    except: { min: 2, max: 2, run: ([items, remove]) => { const gone = new Set(list(remove).map(sameKey)); return list(items).filter((v) => !gone.has(sameKey(v))); } },
+    first: { min: 1, max: 1, run: ([items]) => list(items)[0] ?? null },
+    any: { min: 2, max: 3, run: ([items, path, value]) => list(items).some((item) => (value === undefined ? truth(pick(item, path)) === true : compare(pick(item, path), value) === 0)) },
+    every: { min: 2, max: 3, run: ([items, path, value]) => list(items).every((item) => (value === undefined ? truth(pick(item, path)) === true : compare(pick(item, path), value) === 0)) },
+    filter: { min: 3, max: 3, run: ([items, path, value]) => list(items).filter((item) => compare(pick(item, path), value) === 0) },
+    /** The id of a reference sent either as an id or as a record (`{ id, name }`), else null. */
+    idof: { min: 1, max: 1, run: ([v]) => (typeof v === 'number' ? v : v && typeof v === 'object' && typeof pick(v, 'id') === 'number' ? pick(v, 'id') : null) },
   }),
 );
 

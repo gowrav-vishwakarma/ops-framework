@@ -47,4 +47,22 @@ describe('expressions', () => {
     defineExpressionFunction('stateOfGstin', { min: 1, max: 1, run: ([gstin]) => String(gstin).slice(0, 2) });
     expect(run("stateOfGstin('27ABCDE1234F1Z5')")).toBe('27');
   });
+
+  it('reads lists like sentences: count, sum, pluck, distinct, union, except, any, every, filter, idof', () => {
+    const items = [{ qty: 2, isService: false, batch: { id: 4 } }, { qty: '3.5', isService: true, batch: { id: 4 } }, { qty: 1, isService: false, batch: null }];
+    expect(run('count(data.items)', { data: { items } })).toBe(3);
+    expect(run("count(data.items, 'isService')", { data: { items } })).toBe(1);
+    expect(run("sum(data.items, 'qty')", { data: { items } })).toBe(6.5);
+    expect(run("pluck(data.items, 'batch.id')", { data: { items } })).toEqual([4, 4, undefined]);
+    expect(run("distinct(data.items, 'batch.id')", { data: { items } })).toEqual([4]);
+    expect(run("any(data.items, 'isService')", { data: { items } })).toBe(true);
+    expect(run("every(data.items, 'qty')", { data: { items } })).toBe(true);
+    expect(run("count(filter(data.items, 'isService', false))", { data: { items } })).toBe(2);
+    expect(run('union(data.a, data.b)', { data: { a: ['S1'], b: ['S2', 'S3'] } })).toEqual(['S1', 'S2', 'S3']);
+    expect(run('except(data.a, data.b)', { data: { a: ['S1', 'S2', 'S3'], b: ['S2'] } })).toEqual(['S1', 'S3']);
+    expect(run('first(data.a)', { data: { a: [] } })).toBeNull();
+    expect(run('idof(data.p)', { data: { p: { id: 9, name: 'Ravi' } } })).toBe(9);
+    expect(run('idof(data.p)', { data: { p: 9 } })).toBe(9);
+    expect(run('idof(data.p)', { data: { p: '9' } })).toBeNull();
+  });
 });

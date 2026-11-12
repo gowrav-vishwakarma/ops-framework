@@ -1,0 +1,479 @@
+# Ops framework (`@ops/framework`)
+
+How a write, a list, or an action runs. The service file only declares the entity, its actions are listed in `<module>.actions.ts`, and the work lives in numbered step files under `src/modules/<entity>/ops/`.
+
+Branch deactivate (TMS) is the example. The map of every entity is generated: `npm run flow` writes the project's `docs/entity-flow.md`. This file is the how-to. When the framework changes, update this file in the same change.
+
+The framework serves several projects (TMS, Ankpal) with different conventions: nothing is hard-coded. Defaults follow the Ankpal style (camelCase columns, a schema another system migrates); a project changes them with `defineNames` and `features` (see *Setting up a project*).
+
+## One request
+
+`POST /api/branches/7/actions/deactivate` opens one transaction and runs:
+
+```
+check steps     ops/deactivate/001–399     read, fill state, add issues
+                -- blockers stop here (422); warnings ask for confirm (409) --
+before steps    ops/deactivate/400–499     last changes before the write
+main change     ops/deactivate/500-execute.ts if it exists, else the action's run (status becomes inactive)
+after steps     ops/deactivate/501–999     related records, then the audit row
+commit
+afterCommit     callbacks registered by steps (logs, mail, notifications)
+```
+
+Create, update, and delete use the same order. Their main change is built in: `c.row.save()` or `c.row.destroy()`, between the before steps and the after steps, unless the folder has a `500-execute.ts`. A before step can still change fields on `c.row` before that save.
+
+## Folders
+
+| Folder | Runs on | Route |
+| --- | --- | --- |
+| `save/` | create and update | `POST /`, `PATCH /:id` |
+| `create/`, `update/`, `delete/` | that write only | |
+| `<action>/` | the action named in the service | see kinds below |
+| `list/` | every list | `GET /` |
+| `list-<view>/` | one named list, after `list/` | `GET /?view=<view>` |
+| `view-<name>/` | a read of one record; steps set `c.result` | `GET /:id/views/<name>` |
+
+An unknown folder, a bad file name, a number in the wrong band, or two files with the same number fails boot. `save` shares its numbers with `create` and `update`. `list` shares its numbers with `list-<view>`.
+
+## Step files
+
+```
+ops/deactivate/010-check-assess-open-work.ts
+               ^^^ ^^^^^ ^^^^^^^^^^^^^^^^^^^^
+               number, phase, name
+```
+
+- `NNN-check-name.ts` — 001 to 399. Read only. Fill `state`, add issues. Do not write through `c.t`.
+- `NNN-before-name.ts` — 400 to 499. The checks have passed and the user has confirmed.
+- `500-execute.ts` (or `500-execute-<name>.ts`) — always number 500, at most one per operation. Replaces the main change. See below.
+- `NNN-after-name.ts` — 501 to 999. The main change is done, still inside the transaction.
+- The number is the only order. There is no priority field. In the IDE file tree the folder reads top to bottom in run order: checks, befores, `500-execute.ts`, afters.
+- `flow.ts` holds the operation's data steps by phase (see *Flows*). `_state.ts` and `_shared/` are helpers. The loader ignores other files that do not start with a number.
+
+A step is the default export. A plain object needs nothing injected:
+
+```ts
+export default step<Branch, DeactivateState>({
+  async check({ row, user, count, state }) {
+    state.isHeadOffice = row.isHeadOffice;
+    state.activeUsers = await count(`users WHERE branch_id = :id AND status = 'active'`, { id: row.id });
+  },
+});
+```
+
+A class step is `@Injectable()` and gets Nest constructor injection. The entity's models must be in that module's `SequelizeModule.forFeature`. Services from `CoreModule` (ACL, document numbers, exceptions, `Notifier`) are global.
+
+`when: (c) => ...` skips the step when it returns false. Add `describe: '...'` so the flow doc shows why.
+
+## Actions file
+
+Each module lists its actions in `<module>.actions.ts` (`branches/branches.actions.ts`, `users/users.actions.ts`, `acl/roles.actions.ts`). The service only points at it: `protected readonly actions = branchActions;`.
+
+```ts
+export const branchActions: EntityAction<Branch>[] = [
+  ...statusActions<Branch>({ noun: 'branch' }),
+  {
+    name: 'deactivate-many',
+    label: 'Deactivate selected',
+    kind: 'bulk',
+    permission: 'deactivate',
+    from: { status: ['active'] },
+    confirm: 'Deactivate the selected branches?',
+    danger: true,
+    effect: 'status -> inactive',
+  },
+];
+```
+
+- `name` is the route, the `ops/<name>/` folder, and the permission (`branch.deactivate-many`), unless `permission` names another one.
+- `from` is the row state it starts from. It also enables the button in the UI.
+- `effect` is the one line the flow doc prints for the main change.
+- `run` is optional. `statusActions` gives deactivate and activate a `run` that sets `status`.
+
+## Where the save happens: `500-execute.ts`
+
+The check, before, and after files never do the main write. The main write is, in order of precedence:
+
+1. `ops/<operation>/500-execute.ts`, if the folder has one.
+2. Otherwise the built-in change: `run` on the action, `c.row.save()` for create and update, `c.row.destroy()` for delete, `runCollection` for a collection action.
+
+The execute file receives `c` and `original`. `original()` runs the built-in change, so the file can replace it, wrap it, or skip it:
+
+```ts
+// ops/deactivate-many/500-execute.ts — the action has no run; this is the whole write
+export default execute<Branch>({
+  describe: 'sets status inactive',
+  async run({ row, user, t }) {
+    await row.update({ status: 'inactive', updatedById: user.id }, { transaction: t });
+  },
+});
+```
+
+```ts
+// wrapping the built-in save of an update
+export default execute<Trip>({
+  async run(c, original) {
+    c.row.set({ closedAt: new Date() });
+    await original();
+  },
+});
+```
+
+- `save/500-execute.ts` replaces both create and update. A `create/` or `update/` execute file next to it fails boot.
+- On create, leave `c.row` saved. Its id is what gets audited and returned.
+- The update audit compares every column with `c.before` after the operation, so an execute file that writes its own way is still audited.
+- Lists and views have no execute file. Use before steps to shape the query.
+- A collection action uses `collectionExecute({ run(c, original) {...} })`.
+- An `@Injectable()` class with a `run(c, original)` method works too, with constructor injection.
+
+`toCreate` and `toUpdate` in the service decide which form fields land on the row before create or update saves.
+
+## Issues and state
+
+One `issues` object and one `state` object are created per call and passed to every step. A step does not return them. `issues.block(...)` pushes onto the list; the next step sees the same list.
+
+- `issues.block(code, message)` — hard stop. After the last check step they all come back together as 422 `{ message, errors, blockers }`.
+- `issues.field(name, message)` — same 422, placed on a form field (`errors`).
+- `issues.warn(code, message)` — 409 `{ needsConfirm, warnings }`. The client resends the same call with `confirm: true` (actions) or `?confirm=true` (create, update, delete).
+- `c.unique('code')` — field error when another row in the tenant already has that value.
+
+`state` starts as `{}`. Declare its fields optional in `ops/<operation>/_state.ts`, because earlier steps fill them and later steps read them.
+
+## Passing things to the next step
+
+Every step, the execute file, and the audit share one `c` object. Change it and the steps after see the change:
+
+- **A new value** that is not a column: put it on `c.state` (declare it in `_state.ts`). Example: 010 sets `state.activeUsers`, 020 reads it.
+- **A column of the row**: `c.row.set({ ... })` or `c.row.field = value`. In a before step of create or update, that value is saved by the main change.
+- **The row after raw SQL or another service changed it**: `await c.reload()` re-reads it inside `c.t` into the same object and returns it. Example: `deactivate/520-after-reload-row.ts`. Before the main change of an update, reload throws away the edits not saved yet; compare with `c.before` there instead.
+- **A different row object**: assign `c.row = other`. The framework reads `c.row` for the main change, `c.changed`, `c.unique`, and the audit, so later steps and the save follow it.
+- **The response**: set `c.result` and the endpoint returns it instead of the record.
+
+## What a step receives (`c`)
+
+- **Who.** `c.user` (id, companyId, branchId, branchIds, roleId, partyId, name), `c.scope` (the scope id of the permission being run: `all`, `branch`, `own` or one the app registers) and `c.limits` (its authority limits), `c.can('user.view')` for some other permission.
+- **The row.** `c.row`, `c.before` (stored values; null on create), `c.dto` (body, or the validated action input), `c.changed('status')`, `c.reload()`. On a bulk action, `c.rows` is the whole selection; the steps still run once per record.
+- **Transaction.** Pass `{ transaction: c.t }` on every query. `c.savepoint(work)` rolls back only that work if it throws. `c.separate(work)` commits immediately, even when a later check blocks — do not touch rows this transaction has locked. `c.afterCommit(work)` runs only after a successful commit.
+- **Services.** `c.get(UsersService)` resolves any provider without importing its module. Calling `c.get(PartiesService).perform(c.ctx, id, 'settle', input, c.t)` runs that operation's own steps and audit row inside this transaction.
+- **Raw SQL.** `c.count('users WHERE branch_id = :id', { id })` and `c.sql(sql, replacements, t?)` (rows as objects; `t` defaults to `c.t`). Both run in the tenant's schema.
+- **Other services.** `c.service(Platform).command('inviteMember', input)` / `.query('seats', input)` calls another service's contract (in process or over HTTP, the same either way; see Services). It runs in that service's own transaction, not in `c.t`. `await c.emit(TenantMembers, 'memberConfirmed', payload)` publishes an event durably: written in `c.t`, delivered after commit, never for a rollback. Tenant steps never touch the control plane directly.
+- **Other.** `c.result` (return this instead of the saved row).
+
+A query that omits `transaction` sees only committed data, not this operation's own writes.
+
+## Action kinds
+
+Declared in `<module>.actions.ts`. Each action is a permission: `branch.deactivate`.
+
+- **`row`** (default) — `POST /:id/actions/:name`. Steps in `ops/<name>/` around the main change.
+- **`bulk`** — `POST /actions/:name` with `{ ids }`. Every record is checked first and blockers come back per record. Then before, the main change, and after run per record, in one transaction.
+- **`collection`** — `POST /actions/:name`, no record. Use `collectionStep`, and `runCollection` or `collectionExecute`. Set `c.result` for the response.
+
+`input: SomeDto` validates the body with class-validator before the steps. Field errors go into `issues`. `inputs` is the separate list the UI uses to draw the dialog.
+
+The row menu shows `row` actions only.
+
+### Action metadata and `_actions`
+
+An action also says how the UI shows it. All fields are optional and travel in `GET /<resource>/actions`:
+
+| Field | Meaning |
+| --- | --- |
+| `icon`, `iconColor`, `tooltip` | looks |
+| `shortcut` | a desk key such as `Alt+A`, shown in the label |
+| `ui` | `confirm` (yes/no), `form` (the `inputs` dialog), `silent` (runs at once). Defaults from `confirm` and `inputs` |
+| `display`, `group` | toolbar or row menu, and the menu section |
+| `hideInAcl` | keep the permission out of the role matrix (still enforced) |
+| `available(row, ctx)` | a reason the action cannot run on this row now, or `null` |
+
+`GET /<resource>?actions=1` adds `_actions` to every row: `{ <name>: { allowed, reason } }`, one entry per action the caller holds plus `update` and `delete`. `allowed` is false with a reason when the row is in the wrong state (`from`), outside the caller's scope, refused by a row guard (a locked period), over a limit or soft deleted, or when `available` says no. It is a hint for buttons; the steps still decide.
+
+## Lists and views
+
+A `list/` before step pushes onto `c.where`, `c.include`, or `c.order`. An after step reads `c.rows` and may `row.setDataValue('activeUserCount', n)`.
+
+`list-active/410-before-only-active.ts` adds `where status = active`, so `GET /branches?view=active` runs `list/` and then `list-active/`.
+
+`view-usage/` builds `c.result`. `GET /branches/7/views/usage` returns that object. These steps are read only.
+
+## Setting up a project
+
+The framework is the package `@ops/framework` (`~/Development/ops-framework`). Projects install it as a copy (`.npmrc`: `install-links=true`, dependency `"@ops/framework": "file:../../ops-framework"`); `npm run fw:update` rebuilds and reinstalls it. Nest, sequelize, sequelize-typescript, nestjs-cls, class-validator, pg and ioredis are peer dependencies, so there is one instance of each. App code imports `@ops/framework` (and `@ops/framework/testing` in specs, `@ops/framework/internal` in infrastructure tests). Vitest must inline it (`server.deps.inline: ['@ops/framework']`) so step files loaded with `import()` go through Vite.
+
+**Names, first.** `@ops/framework/names` loads no model. A side-effect module calls `defineNames` and is the first import of `main.ts`, tools and the Vitest `setupFiles`:
+
+```ts
+import { defineNames } from '@ops/framework/names';
+defineNames({ controlSchema: 'ankpal', userTable: 'Users', partition: { exempt: ['State', 'Currency'] } });   // Ankpal
+defineNames({ underscored: true, partition: { column: 'company_id', mirror: 'companies' } });                 // TMS
+```
+
+| Name | Default | Meaning |
+| --- | --- | --- |
+| `controlSchema` | `platform` | schema of control-plane models (a model is a control model when its `schema` equals it) |
+| `userTable` | `users` | tenant user table (audit columns, overrides) |
+| `underscored` | `false` | `tenantTable()` / `controlTable()` / `referenceTable()` use snake_case columns. The framework's own tables are always snake_case |
+| `partition.field` / `column` / `mirror` | `companyId` / `companyId` / `Companies` | tenant attribute, its column, the per-schema mirror table |
+| `partition.exempt` | `[]` | models that carry the attribute but are shared (never filled or pinned) |
+
+**Features.** `FrameworkModule.forRootAsync({ useFactory, features })` decides what the framework owns. A feature is off unless set; `'tables'` uses the framework's own tables, a class is the project's implementation of the contract:
+
+| Feature | Contract | `'tables'` | Ankpal |
+| --- | --- | --- | --- |
+| `acl` | `AclSource.load(user)` -> grants | `roles`, `role_permissions`, `permissions`, `user_permission_overrides` | classic `AclRoles` / `AclRolePermissions` matrix |
+| `audit` | `AuditSink.record` / `history` | `entity_events` | classic `tenant_logger` |
+| `placement` | `PlacementStore.route` / `activeRoutes` / `shard` | `tenant_routing`, `tenant_shards` | classic `TenantRoutings`, `TenantShards` |
+| `tokenValidator` | `TokenValidator.validate(claims, user, req)` | - | stored-token revocation, branch access |
+| `services` | contracts, outbox, inbox, `/_ops/calls` | framework tables | off |
+| `admin` | admin roles, permissions, audit | framework tables | off |
+| `schema` | `owned` (sync, migrations, provisioning, moves) or `external` (default: parity check only) | | `external` (classic's migrations) |
+
+Only enabled features register models and providers, so a project with its own schema meets no framework table. Business rules are not features: period locks, financial years, document numbers and settings are the project's (TMS: `src/modules/period`, `settings`, `sequences`), plugged in as row guards and services.
+
+The options (`FrameworkOptions`) carry the rest:
+
+| Option | What it is |
+| --- | --- |
+| `catalog`, `scopes` | permissions (resource, action, scopes, limits) and scope providers beyond `all`, `branch`, `own` |
+| `acl.actionNames`, `acl.code` | how permission codes are spelled: the framework asks for `list`, `view`, `create`, `update`, `delete`, `restore` and action names (Ankpal: `{ list: 'page', update: 'edit' }`); default code `${resource}.${action}`, `list` defaults to `view` |
+| `tenancy.partition`, `resolve`, `placement`, `sharedSchema` | partition, user to tenant (default `{ companyId, tenantKey }`), `single` / `schemaPerTenant` / `routed` |
+| `tenancy.headers` | headers checked against the token (default `x-company-id` -> companyId, `x-tenant-id` -> tenantKey or companyId); a mismatch is 403 |
+| `auth.userClaims`, `jwtSecret`, `issuer`, `audience`, `tokenKind`, `epoch`, TTLs | claims to `AuthUser`, verification, token kind (default: `typ`, else a company token when it carries the partition field), `epoch: 'required'` to refuse tokens of a moved company (TMS) |
+| `secretKey`, `dbSync`, `controlDbUri`, `migrations`, `shardPool`, `shardIdleMs` | owned-schema and pool settings |
+| `schemaParity` | `block` (503, default when owned), `warn` (logged once per schema, default when external), `off` |
+| `refs.undeclared` | undeclared id columns when building a schema: `error`, `warn` (default), `off` |
+| `redis`, `services`, `admin` | as before |
+| `logging.http` | `off`, `basic` (default: a `request.start` and a `request.finish` line per request, as JSON under `HTTP`: method, URL, company, tenant, user, status, ms), `verbose` (also the payload and the response body, errors included). Passwords are `[REDACTED]`, tokens cut to their start (`logging.redact` adds keys); bodies cut at `logging.bodyLimit` (4000); `logging.skip` paths are not logged (`/api/health`) |
+| `logging.sql`, `logging.steps` | every SQL statement with its time, on every pool (`SQL:<dbKey>`, debug level; `sqlLogger(options, 'primary')` for the app's own connection), and each step and flow file with its time (debug; `OPS_TRACE=1` too) |
+
+## Tenancy
+
+Every request is bound to one tenant before any query. Models never take a connection: `Model.sequelize` and `Model._schema` are getters that read the request's context (`AsyncLocalStorage`), so `Model.findAll`, `c.t`, and `TenantDb` reach the right database and schema without anything being passed down. The setters throw. Pools start at `search_path=tenant_unset`; a transaction does `SET LOCAL search_path`. Because models bind to one Sequelize per process, each e2e file builds its app once (`beforeAll`).
+
+- **Partition column.** The tenant column is filled on create and pinned on find, count, bulk update and bulk destroy by hooks; a row can never be written for another tenant. `PartitionedModel` types it as `companyId` whatever its configured name.
+- **Placement.** `routed` reads `tenant_routing` (status `creating|active|migrating|disabled`, `epoch`, shard, schema) and `tenant_shards` from the control plane, cached. Unknown company: 404. Not `active`: 503. A company being moved gets 503 on every request, not only writes.
+- **Topology.** One control database (schema `platform`, or `controlDbUri`) holds the framework's `tenant_routing`, `tenant_shards`, `framework_inbox`, `framework_outbox`, `framework_migrations`, and the project's platform tables (TMS: `users` identities, `companies`, `user_companies`, `refresh_tokens`, `licenses`, `company_licenses`). Tenants live in any database (a `tenant_shards` row) and any schema: shared by many companies (`tenant_shared`) or their own (`tenant_42`). `ControlPlane.tx` is for platform-side code; tenant work uses `TenantDb.tx` / `c.t`.
+- **Several pods.** Routes and permission sets are cached per process; a change is broadcast on the cluster bus (Redis pub/sub when `redis` is set) and the TTL is the backstop. A company move waits until no process can still hold the old route before it copies. Shard pools unused for `shardIdleMs` close; `ConnectionRegistry.stats()` shows pool use. Behind RDS Proxy or pgbouncer (`?pooler=true`) no startup option is sent: run `ALTER ROLE <app user> SET search_path = tenant_unset` (boot warns when it is missing).
+- **Guards, in order.** `JwtAuthGuard` (signature, issuer, audience, token kind; no database), `TenantContextGuard` (headers from `tenancy.headers` against the token: 403; the route; the epoch when `auth.epoch: 'required'`: 401; schema parity; then the project's `TokenValidator` inside the tenant context), `PermissionGuard`. Headers are checked against the token and never choose the tenant.
+- **Guards on queries.** `installQueryGuards` blocks a query that reaches another database or runs on another tenant's transaction.
+
+### Two-token sign-in
+
+1. `POST /auth/login` (`@Public`) checks email and password against the platform identity and returns a login token (`typ: 'login'`) and the companies to choose from.
+2. `POST /auth/switch-company` with `Authorization: Bearer <login token>` opens one company and returns a company access token (`typ: 'access'`, with `cmp`, `ep` epoch, role, branches, `av` ACL version) and a refresh token bound to that platform user and company. The same call, with a company token and the refresh token, switches company.
+
+Routes that take the login token say `@LoginToken()`; every other route needs the company token. `GET /auth/companies` lists the choices again. The web picker preselects the default company, else the last used, and opens it on Enter.
+
+The framework's `SessionTokens` issues the tokens; the project's platform service does the checks (password, membership, license) and keeps refresh tokens through its `RefreshTokenStore`. What the token says about the person inside the company comes from the company's tenant through the `TenantSessions` contract (`profile` for the picker, `open` for the token); `choice` passes what the person picked with the company (a role, a branch) to the tenant. The framework adds `sub`, `uid`, `cmp`, `ep` and `typ` last, so a tenant cannot change them. `GET /auth/me` is served by the tenant service.
+
+A tenant user is a company profile of a platform identity. Creating a user calls `Platform.inviteMember` (identity plus a pending membership), writes the tenant user in `c.t`, and emits `TenantMembers.memberConfirmed`, which activates the membership only once the user committed. Deactivating emits `memberSuspended` (sessions end), deleting `memberRemoved`. Company admins cannot change a platform user's email or password through the tenant user form.
+
+### Moving a company
+
+`npm run company:move -- --company 2 --to-schema tenant_shared [--to-db primary] [--keep-source]` runs `CompanyMover`: it copies the company's rows with new ids into the target (a schema that may already hold other companies), in one target transaction, remaps real foreign keys while inserting and soft or polymorphic references afterwards, matches reference tables (`permissions`) by natural key, then switches the route (`migrating`, epoch + 1) and removes the source. The CLI then revokes the company's refresh tokens; the epoch bump already invalidates its access tokens.
+
+Before copying, the move checks that source and target are at the same migrations (a new target is built from the models and recorded at the app's migrations) and refuses otherwise; it copies exactly the columns the models declare.
+
+### Declaring references
+
+The mover and the boot check read the model declarations. A column ending in `Id` must be a real foreign key (`@ForeignKey`) or be declared:
+
+- `@SoftRef('table', { zeroIsSystem })` a reference without a database constraint (audit columns, `branchId` where 0 means all)
+- `@NotARef()` a number that merely looks like an id
+- `@Polymorphic({...})` on the class for `entityType` + `entityId` style pairs
+- `referenceTable(name, naturalKey)` for shared lookup tables copied by key, not by id
+
+An undeclared id column fails boot (`undeclaredIdColumns`). Table order for the mover comes from hard foreign keys only.
+
+## Services: platform and tenant
+
+A project has two services: the **platform** (control plane: identities, companies, licenses, partners, sign-in) and the **tenant** service (everything a company works with, in its own database and schema). They never touch each other's data; they talk through **contracts**:
+
+```ts
+export const Platform = defineContract({
+  name: 'platform',
+  plane: 'control',                        // where the handler's data lives: 'control' | 'tenant'
+  calls: {
+    inviteMember: command<InviteMemberDto, { platformUserId: number }>(InviteMemberDto),
+    seats: query<CompanyRefDto, Seats>(CompanyRefDto),
+  },
+  events: { /* ... */ },
+});
+
+@Implements(Platform) @Injectable()
+export class PlatformApi implements Handlers<typeof Platform> {   // the compiler checks every method
+  async inviteMember(input: InviteMemberDto, { t }: CallCtx) { /* writes with { transaction: t } */ }
+  async seats(input: CompanyRefDto, { t }: CallCtx) { /* ... */ }
+}
+
+@Injectable()
+export class MemberEvents {
+  @Subscribe(TenantMembers, 'memberConfirmed', { plane: 'control' })
+  async confirmed(payload: MemberEventDto, { t }: EventCtx) { /* ... */ }
+}
+```
+
+Callers use `ServiceClient.for(Contract)` (in steps: `c.service(Contract)`); events go out with `EventOutbox.emit(t, Contract, 'event', payload)` (in steps: `c.emit`). The same rules hold in every deployment:
+
+- the input is validated on the receiving side (field errors come back as 422); results are plain JSON;
+- a handler runs in its own transaction on its plane; a tenant handler also runs in the call's company (the caller's company by default, `{ companyId }` to choose);
+- a command called with `{ key }` runs once per key: a retry gets the stored result (the record commits with the handler's work);
+- HTTP errors pass through as they are; any other error becomes a plain 500;
+- an event is written in the emitter's transaction (`framework_outbox` of that database), published after commit, re-published by the sweeper if a process died in between, and delivered at least once to each subscriber method, which skips repeats (`framework_inbox`).
+
+The framework relies on two contracts the project implements on its tenant side: `TenantSessions` (sign-in) and `TenantProvisioning` (build and seed a company's place). Everything else (TMS: `Platform`, `TenantMembers` in `src/platform/contracts.ts`) is the project's. Tenant modules import only that contracts file from `src/platform` (boundary spec).
+
+### Deployments
+
+One image, `SERVICES=platform,tenant` (default: both, in one process; dev and on-prem). In the cloud, run it twice:
+
+| | platform | tenant |
+| --- | --- | --- |
+| `SERVICES` | `platform` | `tenant` |
+| `SERVICE_ENDPOINTS` | `tenant-sessions,tenant-provisioning=http://tenant:3000/api` | `platform=http://platform:3000/api` |
+| both | `SERVICE_SECRET`, `REDIS_URL`, `JWT_SECRET`, `DATABASE_URI` | |
+
+A contract answered in the process is called in process; otherwise over internal HTTP at `POST <endpoint>/_ops/calls`, signed with HMAC (timestamp plus body, 60 s window) and load-balanced by the platform (Kubernetes Service, ECS Service Connect). Queries and keyed commands are retried on network errors and 502-504. Keep `/_ops` on the internal network. Events travel on Redis Streams (`ops:events:<contract>`): each subscriber method is a consumer group, so it gets every event once however many replicas run; a message unacknowledged for 60 s is claimed by another replica, and after 10 deliveries it is parked on `ops:events:dead`. Route the public `/api/auth/me` and tenant paths to the tenant service, `/api/auth/*` and `/api/admin/*` to the platform. Every replica is stateless; scale each service on its own.
+
+## Migrations
+
+`sync` (`DB_SYNC=alter`) is for local development only and is refused when `NODE_ENV=production`. Schemas change through migrations:
+
+- `src/migrations/control/` runs once on the control plane; `src/migrations/tenant/` in every tenant place (every distinct database and schema in `tenant_routing`). Files are `YYYYMMDDHHMMSS-name.ts`, default-exporting `migration({ up({ qi, t, schema }), down? })`. `qi` is pinned to the schema; pass `{ transaction: t }`. Write migrations against the database, never through models.
+- `npm run migrate:new -- tenant add-vehicle-color` creates a file; `npm run migrate` applies everything (control first; a failing tenant place is reported, the others continue; the job exits non-zero); `npm run migrate:status` lists what is pending; `--only`, `--db`, `--schema` narrow a run; `migrate undo` reverts one schema's last migration locally.
+- Each migration runs in its own transaction with the schema's `search_path`, is recorded in `framework_migrations` in that transaction, and holds an advisory lock per schema, so two runners never apply it twice. Dev `alter` syncs take the same lock.
+- A new place (a new company in its own schema, a new shard) is built from the models and records every existing migration as applied. A request to a schema whose tables lag the models gets 503.
+- Run the migration job before rolling out new code, as a one-off task (Kubernetes Job, ECS task) with `SERVICES` unset, so every model is known.
+
+## Admin side (control plane)
+
+The same operations framework runs the platform's admin panel: `ControlCrudService` is to control-plane tables what `TenantCrudService` is to a company's. Steps, `500-execute.ts`, actions (`row`, `bulk`, `collection`), list views, limits, `_actions`, `editLocks`, dependents and history all work the same; what differs is the plane:
+
+| | `TenantCrudService` | `ControlCrudService` |
+| --- | --- | --- |
+| who | `AuthUser` (company token) | `AdminUser` (admin token, `typ: 'admin'`) |
+| pin | the caller's company | none |
+| transaction | the tenant's schema | the control plane (`ControlPlane.tx`) |
+| permissions | `roles` / `role_permissions` in the tenant schema (`AclService`) | `admin_roles` / `admin_role_permissions` (`AdminAclService`) |
+| scopes | `all`, `branch`, `own`, `options.scopes` | `all`, `own` (created by the admin), `options.admin.scopes` |
+| audit | tenant `entity_events` | control `entity_events` (`ControlEvent`, with the admin's name) |
+
+- `crudController({ ..., plane: 'control' })` marks the controller `@AdminRoutes()`: only admin tokens are accepted, a company token is refused (and an admin token is refused on company routes), no tenant context is set, `@RequirePermission` checks the admin's grants.
+- Steps of a control entity type the admin: `step<PlatformCompany, object, Dto, AdminUser>({...})`. `CrudService`, the contexts, `EntityAction` and `ScopeDef` take the user type as their last parameter, defaulting to `AuthUser`.
+- `ControlModel` adds `createdById` / `updatedById` (admin ids) to a control table; `ControlCrudService` stamps them.
+- `FrameworkOptions.admin`: `catalog` (admin permissions, built with `buildCatalog`), `scopes`, `userClaims` (token claims to `AdminUser`), `tokenTtl`. `SessionTokens.adminToken(id, claims)` signs the token after the project's own sign-in.
+- `AdminAclModule` (framework) serves admin roles and their permission matrix at `/admin/roles` and `/admin/permissions`; `AdminCatalogService` keeps `admin_permissions` equal to the catalog, creates a `SUPER_ADMIN` system role when none exists, and gives system roles everything.
+- Who the admins are, their sign-in and every admin screen are the project's. TMS: `src/platform/admin/` (admin users, companies with registration as `create`'s `500-execute.ts`, plans, company licenses, sign-ins, memberships, databases with encrypted connection strings, placements with a `move` collection action). Route `/api/admin/*` to the platform service.
+- The migration job syncs both catalogs: the admin catalog after the control plane, each tenant schema's catalog after that schema, so a new permission reaches every schema with the deploy.
+
+## Permissions: scopes and limits
+
+A grant is `{ scope, limits }`. The catalog lists the scope ids each permission accepts; roles and per-user overrides store the id and the limits (JSONB). Both are validated on save: unknown code, scope the entry does not offer, unknown limit key, or a negative number is a field error on `permissions`.
+
+**Scopes** are strings resolved through a registry. `all`, `branch` and `own` are built in; the app adds more through `options.scopes`, and a service lists the ones it supports in `protected readonly scopes`:
+
+```ts
+export const activeOnlyScope: ScopeDef = {
+  id: 'active-only',
+  label: 'Active records',
+  where: () => ({ status: 'active' }),     // for lists, get and writes
+  allows: (_ctx, row) => row.get('status') === 'active',  // one loaded row, no query
+};
+```
+
+A scope id nobody provides denies. The effective permission set is cached per `company:user:role:av`; changing a role or override bumps the version.
+
+**Limits** cap what a grant allows (approve up to an amount). A service declares them on `create`, `update`, `delete` (`protected readonly limits = { update: [AMOUNT] }`), and an action declares `limits: [...]`:
+
+```ts
+const AMOUNT: LimitDef<Invoice> = { key: 'amount', label: 'Up to amount', type: 'money', value: (row) => Number(row.total) };
+```
+
+Over the limit blocks with `limit_exceeded` before the steps; in a bulk action it is reported per record. Unset means unlimited. `c.limits` holds the caller's limits for custom rules. The matrix shows a Limit column built from the catalog's `limits`.
+
+## Row guards (project rules on every write)
+
+A period lock, a closed financial year or a frozen document is a project rule; the framework runs it. A service lists them, the framework runs them before the check steps of every create, update, delete and action, in `_actions` hints, and on writes to that model from flow steps:
+
+```ts
+protected readonly guards = [periodLock<Invoice>('invoiceDate')];   // TMS: src/modules/period/period-lock.guard.ts
+```
+
+```ts
+export interface RowGuard<M, U> {
+  id: string;                     // 'period-lock'; actions skip it with skipGuards: ['period-lock']
+  code?: string;                  // issue code, default the id
+  describe?: string;              // flow document
+  prepare?(ctx, get, t?): Promise<unknown>;   // loaded once per transaction (a bulk action asks once) or per list
+  reason({ op, row, before, ctx, prepared, can }): string | null | Promise<string | null>;
+}
+```
+
+A refusal is a blocker (422). `can('period.unlock')` lets a guard give way to a permission.
+
+## Soft delete and restore
+
+`tenantTable('invoices', indexes, { softDelete: true })` makes the model paranoid, and the service sets `protected readonly softDelete = true`. Delete then sets `deleted_at`, normal reads skip the row, and the framework adds a `restore` action (permission `<resource>.restore`, which must be in the catalog). `GET /<resource>?deleted=1` lists deleted records and needs that permission. A dependent that is also soft deleted sets `paranoid: true` in `dependents` so its deleted rows do not block.
+
+## Testing a step without the database
+
+`fakeOpContext` and `runSteps` (from `@ops/framework/testing`) build the same `c` and run the phase methods in order. Give answers for `c.service()` calls with `calls: { 'platform.seats': { used: 1, max: 5 } }`; `c.emitted` and `c.calls` record what the steps sent. See `branches/ops/deactivate/deactivate.spec.ts`. Test an execute file by calling its `run(c, original)` directly with a fake `original`.
+
+## Flows: step files written as data
+
+An operation's rules as data go in one file, `ops/<op>/flow.ts`, grouped by phase. Each phase's list runs at the start of that phase, before the numbered files of the phase (a `save/` or `list/` flow before the operation's own), so checks still collect their issues together and befores still run only after every check passed:
+
+```ts
+// ops/save/flow.ts
+export default flow({
+  check: [{ kind: 'unique', fields: ['name'], message: 'The name must be unique.' }],
+  before: [{ kind: 'normalizeDecimals', rate: ['defaultValue'] }],
+});
+```
+
+A numbered step file can also default-export `flow({ steps: [...] })` instead of `step({...})`, to put data steps at an exact place between code steps (the phase comes from the file name). Every flow is checked when the app boots (kinds, phases, expressions, methods); a mistake fails boot with the file and step position.
+
+```ts
+
+// ops/save/420-before-gst-type.ts
+export default flow({
+  steps: [
+    { kind: 'lookup', model: 'Branch', where: { id: 'data.branchId' }, as: 'branch', required: 'Branch not found' },
+    { kind: 'lookup', model: 'Account', where: { id: 'data.partyId' }, as: 'party' },
+    { kind: 'if', test: 'branch.stateId = party.stateId', then: [{ kind: 'set', values: { gstType: "'CGST_SGST'" } }], else: [{ kind: 'set', values: { gstType: "'IGST'" } }] },
+  ],
+});
+```
+
+Two languages, kept apart:
+
+- **Expressions** (`'data.qty * data.rate'`, `"row.status = 'active' and data.amount > 1000"`) compute values and conditions, nothing else: no data access, no control flow, never `eval`. Names: `data` (body or action input), `row`, `before`, `user`, `state`, `op`, and every `as` of an earlier step. SQL null rules; decimals that arrive as text compare as numbers; functions from a fixed list (`coalesce`, `if`, `round`, `lower`, `concat`, `date`, `fy`, `fystart`, `adddays`, `daysbetween`, `today`...) plus `defineExpressionFunction`. A string argument of a step is an expression (text literals are quoted: `"'IGST'"`); numbers, booleans and null are values.
+- **Steps** do the work: `block`, `warn`, `require`, `unique`, `notReferenced`, `lookup`, `find`, `let`, `state`, `set` (before), `create`, `update`, `destroy`, `syncChildren` (before/after), `if`, `forEach`, `stop`, `call`, and for lists `where` (before) and `decorate` (after). Every step takes `when` and `describe`. `block` in a check step joins the other issues; later it stops at once with the same 422.
+- **Code in the same file.** `methods: { split(run, args) {...} }` and `{ kind: 'call', method: 'split', args: {...}, as: 'parts' }` hold what is not repetitive.
+- **Project kinds** name the project's repeated rules so the files read as business: `defineStepKind({ name, phases, target, fields, validate, run, describe })`, typed by declaration merging:
+
+  ```ts
+  declare module '@ops/framework' {
+    interface FlowStepKinds<M> { normalizeDecimals: { rate?: Field<M>[]; qty?: Field<M>[] } }
+    interface FlowKindPhases { normalizeDecimals: 'before' }
+  }
+  ```
+
+**Mistakes are caught early.** Write `flow<Charge>({...})`:
+
+- the compiler: `kind` is a union of the registered kinds (autocomplete, typos do not compile); `check`, `before` and `after` accept only the kinds allowed in that phase (`FlowKindPhases`: `set` and `normalizeDecimals` under `check` do not compile); field arguments typed `Field<M>` (`unique.fields`, `set` keys, `normalizeDecimals.rate`) accept only the model's attributes (`'defaultValu'`: "did you mean 'defaultValue'?");
+- the boot: the same rules again, plus `row.x` / `before.x` inside expressions and every kind's `fields` against the real model's attributes, and expressions parsed. Expressions stay text (names under `data` come from the body and are not checked).
+
+**Data access in flows is never wider than the operation.** Data steps go through `FlowDb` (no raw SQL): the tenant is always pinned by the models; the caller's data scope (branch, own, the branches a grant names) limits every `lookup`, `find`, `create`, `update`, `destroy` and `syncChildren` (creating or moving a row outside the scope is refused) unless the step says `asSystem: true`, which the flow document shows; the row guards of the model written always run. `unique` and `notReferenced` count across the whole tenant (an integrity rule must see every row) and return no data. A write touching more than 5,000 rows is refused, never truncated.
+
+Test a flow without a database: `runFlow(file, 'check', fakeOpContext({ dto, row, services: [[FlowDb, fakeDb]] }))` (each phase of a `flow.ts` separately).
+
+## Seeing it
+
+`npm run flow` rewrites `docs/entity-flow.md` from the running modules: every operation, its route, its step files, and `=> effect` where the main change sits (or `=> <op>/500-execute.ts (replaces: ...)`). `OPS_TRACE=1` logs each step and its time. An unexpected error from a step is rethrown with the file name prefixed, `[ops] branches/ops/deactivate/020-check-enforce-rules.ts: ...`.
+
+History of one row is `GET /<resource>/:id/history`.
+
+## Tests
+
+Unit specs (`npm test`) need no database: steps and flows with `fakeOpContext` / `runFlow`, and pure rules such as scopes, limits, row guards, `_actions` and the partition hooks. End-to-end specs live in the projects (TMS below; Ankpal: `ankpal-ops-backend/test`, on a clone of the auto-tester template). TMS: end-to-end specs (`npm run test:e2e`, `*.e2e-spec.ts`) use one app per file because models bind once per process; `test/support/e2e-invoice.ts` is a small entity that exercises scopes, limits, period lock, `_actions` and soft delete. E2E files run one after another (`fileParallelism: false`): each boots against the one dev database with `DB_SYNC=alter`, and an alter must not meet another file's queries. Beyond those: `admin-panel.e2e-spec.ts` (admin tokens, registration from the panel, suspend, license cancel, membership block, password reset, admin roles, audit, masked database secrets, a move), `services.e2e-spec.ts` (contract rules in one process), `migrations.e2e-spec.ts`, `topology.e2e-spec.ts` (one control database, tenants in shared and dedicated schemas on two databases: sign-in, isolation, migrations, a move across databases), `redis.e2e-spec.ts` and `split-deployment.e2e-spec.ts` (platform and tenant in separate processes over HTTP and Redis Streams; both need Redis at `E2E_REDIS_URL`, default `redis://127.0.0.1:6379`, and skip without it). `npm run db:reset` rebuilds the platform and two demo companies.

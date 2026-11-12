@@ -1,0 +1,87 @@
+{
+  "name": "@ops/framework",
+  "version": "0.1.0",
+  "description": "Ops framework: multi-tenant NestJS + sequelize-typescript operations engine (steps, actions, flows, tenancy, ACL, audit).",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "default": "./dist/testing.js"
+    },
+    "./internal": {
+      "types": "./dist/internal.d.ts",
+      "default": "./dist/internal.js"
+    },
+    "./names": {
+      "types": "./dist/names.d.ts",
+      "default": "./dist/names.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "docs"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "oxlint src/"
+  },
+  "peerDependencies": {
+    "@nestjs/common": "^12.0.1",
+    "@nestjs/core": "^12.0.1",
+    "@nestjs/jwt": "^12.0.2",
+    "@nestjs/mapped-types": "^12.0.0",
+    "@nestjs/sequelize": "^12.0.0",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.15.1",
+    "ioredis": "^5.11.1",
+    "nestjs-cls": "^7.0.1",
+    "pg": "^8.23.1",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1",
+    "sequelize": "^6.37.8",
+    "sequelize-typescript": "^2.1.6"
+  },
+  "peerDependenciesMeta": {
+    "ioredis": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@nestjs/common": "^12.0.1",
+    "@nestjs/core": "^12.0.1",
+    "@nestjs/jwt": "^12.0.2",
+    "@nestjs/mapped-types": "^12.0.0",
+    "@nestjs/platform-express": "^12.0.1",
+    "@nestjs/sequelize": "^12.0.0",
+    "@nestjs/testing": "^12.0.1",
+    "@types/express": "^5.0.0",
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.23.1",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.15.1",
+    "ioredis": "^5.11.1",
+    "nestjs-cls": "^7.0.1",
+    "oxlint": "^1.58.0",
+    "pg": "^8.23.1",
+    "pg-hstore": "^2.3.4",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1",
+    "sequelize": "^6.37.8",
+    "sequelize-typescript": "^2.1.6",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.2"
+  }
+}

@@ -3,6 +3,7 @@ import type { ReqCtx } from '../auth/auth-user.js';
 import type { Model } from 'sequelize-typescript';
 import type { EntityAction } from './entity-action.js';
 import type { Attrs, OpContext } from './op-context.js';
+import { checkRefs } from './ref-checks.js';
 import { preparedFor, type RowGuard } from './row-guard.js';
 
 /** The reason a record is not in a state the action starts from, or null. */
@@ -22,6 +23,8 @@ export interface BuiltInChecks<M extends Model> {
   limits?: readonly LimitDef<M>[];
   /** The service's guards that apply to this operation. */
   guards?: readonly RowGuard<M, any>[];
+  /** Check that the references the write sets stay in the record's company (creates and updates). */
+  refs?: boolean;
 }
 
 /** Blocks when a project guard refuses the record, or it is above the caller's limit. */
@@ -33,6 +36,7 @@ export async function runBuiltInChecks<M extends Model>(c: OpContext<M, Attrs, a
     if (reason) c.issues.block(guard.code ?? guard.id, reason);
   }
   checkLimits(c.issues, c.ctx, c.row, spec.limits, spec.label);
+  if (spec.refs) await checkRefs(c);
 }
 
 /** Limits that apply to an operation: the service's `limits` map, or the action's own. */

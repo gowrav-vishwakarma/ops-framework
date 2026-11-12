@@ -412,6 +412,17 @@ const AMOUNT: LimitDef<Invoice> = { key: 'amount', label: 'Up to amount', type: 
 
 Over the limit blocks with `limit_exceeded` before the steps; in a bulk action it is reported per record. Unset means unlimited. `c.limits` holds the caller's limits for custom rules. The matrix shows a Limit column built from the catalog's `limits`.
 
+## References stay in the company
+
+Before a create's or update's check steps, the framework checks every foreign key the write sets
+(create) or changes (update) whose target model carries the partition field and is not `exempt`:
+the target row must belong to the record's company. In a shared schema the database's foreign key
+only proves the row exists, maybe in another company. All of a write's keys are one statement
+(`SELECT i WHERE EXISTS (...) UNION ALL ...`); a miss is a 422 field error on the key
+("The selected main category was not found."). Empty keys (`null`, `0`, `''`) and shared tables are
+left to the database. Values steps set later are the server's own and are not checked
+(`src/crud/ref-checks.ts`).
+
 ## Row guards (project rules on every write)
 
 A period lock, a closed financial year or a frozen document is a project rule; the framework runs it. A service lists them, the framework runs them before the check steps of every create, update, delete and action, in `_actions` hints, and on writes to that model from flow steps:

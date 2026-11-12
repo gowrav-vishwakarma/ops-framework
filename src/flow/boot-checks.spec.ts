@@ -35,6 +35,7 @@ const KINDS: Array<[string, unknown, Phase[], 'row' | 'list' | 'any']> = [
   ['forEach', Flow.forEach({ items: 'data.v', as: 'x', steps: [] }), PHASES, 'any'],
   ['try', Flow.try({ steps: [] }), PHASES, 'any'],
   ['stop', Flow.stop(), PHASES, 'any'],
+  ['do', Flow.do('code', () => undefined), PHASES, 'any'],
   ['call', Flow.call({ method: 'm' }), PHASES, 'any'],
   ['where', Flow.where({ values: {} }), ['before'], 'list'],
   ['decorate', Flow.decorate({ values: {} }), ['after'], 'list'],

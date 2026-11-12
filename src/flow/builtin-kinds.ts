@@ -1,8 +1,21 @@
 import { Logger } from '@nestjs/common';
 import { col, fn, Op, where as sqlWhere, type WhereOptions } from 'sequelize';
 import type { Row } from './flow-db.js';
-import { defineStepKind, type Field, type FlowStep } from './kinds.js';
+import { declaredNames, defineStepKind, type Field, type FlowStep } from './kinds.js';
 import { rowValue, type FlowRun } from './run.js';
+import type { OpContext } from '../crud/op-context.js';
+
+/** The operation as a code paragraph (`Flow.do`) sees it: `row` typed as the flow's model. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type FlowCodeContext<M = any> = Omit<OpContext<any, any, any>, 'row'> & {
+  row: M;
+};
+/** A code paragraph: the operation, and the values earlier steps named (`as`, `let`...). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type FlowCode<M = any> = (
+  c: FlowCodeContext<M>,
+  named: Record<string, any>,
+) => unknown;
 
 /** Expression-or-value maps: `{ name: 'data.name', isActive: true }`. */
 export type Values = Record<string, unknown>;
@@ -139,6 +152,12 @@ declare module './kinds.js' {
      * the operation carries on.
      */
     try: { steps: FlowStep<M>[] };
+    /**
+     * A paragraph of plain code between the steps: `Flow.do('what it does', (c, { branch }) => {...})`.
+     * `c` is the operation (`c.dto`, `c.row`, `c.state`, `c.t`, `c.issues`...), the second argument
+     * the values earlier steps named. What it returns is named `as` for the steps after it.
+     */
+    do: { run: FlowCode<M>; as?: string };
     /** Ends this flow file here (the next step files still run). */
     stop: Record<never, never>;
     /** A method of this flow file (code), with evaluated arguments; its result named `as`. */
@@ -201,6 +220,17 @@ const modelOf = (run: FlowRun, model: string | undefined): string => {
   if (!name || name === 'Object') throw new Error('unique needs `model` here');
   return name;
 };
+
+/** Plain code between the steps (`Flow.do`). */
+const doKind = defineStepKind({
+  name: 'do',
+  validate: (a) => (typeof a.run === 'function' ? null : 'do needs a function'),
+  run: async (run, a) => {
+    const result = await a.run(run.c as never, Object.fromEntries(run.vars));
+    if (a.as) run.vars.set(a.as, result);
+  },
+  describe: (a) => `code${a.as ? ` (as ${a.as})` : ''}`,
+});
 
 /**
  * The built-in step kinds, as builders: `Flow.lookup({ ... })`, `Flow.if({ ... })`. Ctrl+click
@@ -678,7 +708,11 @@ export const Flow = {
       const items = (run.value(a.items) as unknown[] | null) ?? [];
       if (!Array.isArray(items))
         throw new Error(`forEach: ${a.items} is not a list`);
+      // Names given inside the loop start empty for each item: a step skipped for this item never
+      // shows the value it had for the previous one.
+      const inner = [...declaredNames(a.steps)];
       for (const item of items) {
+        for (const name of inner) run.vars.delete(name);
         run.vars.set(a.as, item);
         if ((await run.steps(a.steps)) === 'stop') return 'stop';
       }
@@ -707,6 +741,12 @@ export const Flow = {
     },
     describe: () => 'try (a failure undoes only these steps)',
   }),
+
+  do: <M = any>(
+    describe: string,
+    run: FlowCode<M>,
+    options: { as?: string; when?: string; unless?: string } = {},
+  ) => doKind<M>({ describe, run, ...options }),
 
   stop: defineStepKind({
     name: 'stop',

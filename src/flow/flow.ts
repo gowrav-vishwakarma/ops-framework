@@ -2,7 +2,8 @@ import type { Phase } from '../crud/op-context.js';
 import { compileExpression } from '../expr/evaluate.js';
 import './builtin-kinds.js';
 import { expressionNames } from '../expr/parse.js';
-import { stepKind, type FlowStep, type FlowStepIn, type StepTarget } from './kinds.js';
+import { declaredNames, stepKind, type FlowStep, type FlowStepIn, type StepTarget } from './kinds.js';
+export { declaredNames } from './kinds.js';
 import { FlowRun, type FlowContext, type FlowMethod } from './run.js';
 
 export interface FlowDefinition<M = any> {
@@ -35,23 +36,6 @@ const targetOf = (op: string): Exclude<StepTarget, 'any'> => (op === 'list' || o
 
 /** Names expressions may always read. */
 const ROOTS = new Set(['data', 'row', 'before', 'user', 'state', 'op', 'failed']);
-
-/** Every name the steps give a value (`as`, `missing`, `into`, `let` keys), nested lists included. */
-export function declaredNames(steps: readonly FlowStep[]): Set<string> {
-  const names = new Set<string>();
-  const visit = (list: readonly FlowStep[]) => {
-    for (const step of list) {
-      const args = step as unknown as Record<string, unknown>;
-      for (const key of ['as', 'missing', 'into']) if (typeof args[key] === 'string') names.add(args[key] as string);
-      if (args.kind === 'let' && args.values && typeof args.values === 'object') for (const key of Object.keys(args.values)) names.add(key);
-      const kind = stepKind(String(args.kind));
-      for (const name of kind?.names?.(args as never) ?? []) names.add(name);
-      for (const nested of kind?.children?.(args as never) ?? []) if (Array.isArray(nested)) visit(nested);
-    }
-  };
-  visit(steps);
-  return names;
-}
 
 /** Checks a step list for a phase and target; returns the description lines. Throws with the step's position. */
 function check(steps: readonly FlowStep[], phase: Phase, target: Exclude<StepTarget, 'any'>, methods: Record<string, FlowMethod>, path: string, model?: FlowPlace['model'], declared: Set<string> = declaredNames(steps)): string[] {

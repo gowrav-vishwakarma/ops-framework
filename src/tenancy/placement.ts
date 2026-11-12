@@ -13,6 +13,8 @@ export interface ResolveOptions {
 interface Cached {
   at: number;
   value: Placement;
+  /** The route's tenant key, to refuse a token naming another tenant on a cache hit too. */
+  tenantKey?: string | null;
 }
 
 /**
@@ -61,7 +63,11 @@ export class PlacementResolver implements OnModuleInit {
 
     const ttl = this.cacheMs;
     const hit = this.cache.get(ref.companyId);
-    if (hit && Date.now() - hit.at < ttl && !resolveOptions.ignoreStatus) return hit.value;
+    if (hit && Date.now() - hit.at < ttl && !resolveOptions.ignoreStatus) {
+      // The same answer as an uncached resolve: a token naming another tenant is refused either way.
+      if (ref.tenantKey && hit.tenantKey && ref.tenantKey !== hit.tenantKey) throw new NotFoundException('Company not found');
+      return hit.value;
+    }
 
     const row = await this.routes().route(ref);
     if (!row) throw new NotFoundException('Company not found');
@@ -71,7 +77,7 @@ export class PlacementResolver implements OnModuleInit {
       throw new ServiceUnavailableException(row.status === 'migrating' ? 'This company is being moved. Try again in a moment.' : `Company is ${row.status}`);
     }
     const value: Placement = { dbKey: row.dbKey, schema: row.schema, epoch: row.epoch };
-    if (row.status === 'active') this.cache.set(ref.companyId, { at: Date.now(), value });
+    if (row.status === 'active') this.cache.set(ref.companyId, { at: Date.now(), value, tenantKey: row.tenantKey ?? null });
     return value;
   }
 

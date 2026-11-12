@@ -106,3 +106,20 @@ export function stepKind(name: string): StepKind<Record<string, unknown>> | unde
 export function stepKindNames(): string[] {
   return [...KINDS.keys()].sort();
 }
+
+/** Every name the steps give a value (`as`, `missing`, `into`, `let` keys), nested lists included. */
+export function declaredNames(steps: readonly FlowStep[]): Set<string> {
+  const names = new Set<string>();
+  const visit = (list: readonly FlowStep[]) => {
+    for (const step of list) {
+      const args = step as unknown as Record<string, unknown>;
+      for (const key of ['as', 'missing', 'into']) if (typeof args[key] === 'string') names.add(args[key] as string);
+      if (args.kind === 'let' && args.values && typeof args.values === 'object') for (const key of Object.keys(args.values)) names.add(key);
+      const kind = stepKind(String(args.kind));
+      for (const name of kind?.names?.(args as never) ?? []) names.add(name);
+      for (const nested of kind?.children?.(args as never) ?? []) if (Array.isArray(nested)) visit(nested);
+    }
+  };
+  visit(steps);
+  return names;
+}

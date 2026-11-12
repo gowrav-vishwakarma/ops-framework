@@ -14,7 +14,7 @@ interface Charge {
 const compiles = (_build: () => unknown) => undefined;
 
 /** One sample per built-in kind: its builder must give exactly `{ kind, ...args }`. */
-const SAMPLES: Record<keyof typeof Flow, Record<string, unknown> | undefined> = {
+const SAMPLES: Record<Exclude<keyof typeof Flow, 'do'>, Record<string, unknown> | undefined> = {
   block: { message: 'm', code: 'c', field: 'f' },
   warn: { message: 'm' },
   require: { fields: ['a'] },
@@ -51,9 +51,15 @@ describe('builders', () => {
   });
 
   it('there is one builder per registered built-in kind, and the samples cover them all', () => {
-    expect(Object.keys(Flow).sort()).toEqual(Object.keys(SAMPLES).sort());
+    expect(Object.keys(Flow).sort()).toEqual([...Object.keys(SAMPLES), 'do'].sort());
     for (const name of Object.keys(Flow)) expect(stepKind(name)?.name).toBe(name);
     expect(stepKindNames()).toEqual(expect.arrayContaining(Object.keys(Flow)));
+  });
+
+  it('Flow.do is plain code between the steps: described first, its result named for later steps', async () => {
+    const paragraph = Flow.do('double the total', (c, named) => Number(named.total) * 2, { as: 'doubled', when: 'data.a' });
+    expect(paragraph).toMatchObject({ kind: 'do', describe: 'double the total', as: 'doubled', when: 'data.a' });
+    expect(typeof (paragraph as { run?: unknown }).run).toBe('function');
   });
 
   it('a builder never lets an argument named kind change the kind', () => {

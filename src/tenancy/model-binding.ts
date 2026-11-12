@@ -1,5 +1,5 @@
 import { installWriteGuardHooks } from '../crud/write-guard.js';
-import { InternalServerErrorException, Logger } from '@nestjs/common';
+import { ForbiddenException, InternalServerErrorException, Logger } from '@nestjs/common';
 import { Op, type ModelStatic, type WhereOptions } from 'sequelize';
 import type { Model, Sequelize } from 'sequelize-typescript';
 import { NAMES } from '../naming.js';
@@ -73,9 +73,22 @@ function installPartitionHooks(model: AnyModel): void {
     const id = currentTenant()?.ref.companyId;
     return id ? id : undefined;
   };
+  /** A row of another company is never written from this one: refused, never silently moved. */
+  const refuse = (value: unknown, id: number) => {
+    throw new ForbiddenException(`${model.name}: a row of company ${String(value)} cannot be written while working for company ${id}`);
+  };
   const fill = (instance: Model) => {
     const id = current();
-    if (id !== undefined && instance.get(field) == null) instance.set(field, id as never);
+    if (id === undefined) return;
+    const value = instance.get(field);
+    if (value == null) instance.set(field, id as never);
+    else if (Number(value) !== id) refuse(value, id);
+  };
+  /** A bulk update that would set the partition to another company. */
+  const keepOnUpdate = (options: { attributes?: Record<string, unknown> }) => {
+    const id = current();
+    const value = options.attributes?.[field];
+    if (id !== undefined && value !== undefined && value !== null && Number(value) !== id) refuse(value, id);
   };
   const pinOn = (key: string) => (options: { where?: WhereOptions }) => {
     const id = current();
@@ -92,5 +105,9 @@ function installPartitionHooks(model: AnyModel): void {
   model.addHook('beforeFind', 'framework:partition-find', pin as never);
   model.addHook('beforeCount', 'framework:partition-count', pin as never);
   model.addHook('beforeBulkUpdate', 'framework:partition-update', pinColumn as never);
+  model.addHook('beforeBulkUpdate', 'framework:partition-keep', keepOnUpdate as never);
+  // Saves without validation (`validate: false`) skip beforeValidate: check again just before writing.
+  model.addHook('beforeCreate', 'framework:partition-create', fill as never);
+  model.addHook('beforeUpdate', 'framework:partition-save', fill as never);
   model.addHook('beforeBulkDestroy', 'framework:partition-destroy', pinColumn as never);
 }

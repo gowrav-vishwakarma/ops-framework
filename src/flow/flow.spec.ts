@@ -245,4 +245,26 @@ describe('flows: step files as data', () => {
     // @ts-expect-error a write does not compile in a check flow
     checkFlow<Charge>({ steps: [Flow.set({ values: { name: "'x'" } })] });
   });
+
+  it('names given inside forEach start empty for each item, so a skipped step never shows the previous value', async () => {
+    const seen: unknown[] = [];
+    const c = ctx(new MemoryDb(), { dto: { items: [1, 2] } });
+    await runFlow(
+      flow({
+        steps: [
+          Flow.forEach({
+            items: 'data.items',
+            as: 'item',
+            steps: [
+              Flow.let({ values: { firstOnly: "'set for 1'" }, when: 'item = 1' }),
+              Flow.do('record', (_c, named) => void seen.push(named.firstOnly ?? null)),
+            ],
+          }),
+        ],
+      }),
+      'after',
+      c,
+    );
+    expect(seen).toEqual(['set for 1', null]);
+  });
 });

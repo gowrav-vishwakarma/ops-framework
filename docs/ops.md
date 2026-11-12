@@ -188,6 +188,13 @@ An action also says how the UI shows it. All fields are optional and travel in `
 
 `GET /<resource>?actions=1` adds `_actions` to every row: `{ <name>: { allowed, reason } }`, one entry per action the caller holds plus `update` and `delete`. `allowed` is false with a reason when the row is in the wrong state (`from`), outside the caller's scope, refused by a row guard (a locked period), over a limit or soft deleted, or when `available` says no. It is a hint for buttons; the steps still decide.
 
+## After every save: `afterSave`
+
+`protected async afterSave(c)` runs after the steps of every create and update, in the write's
+transaction, whether or not a column changed (a form's link rows may change alone), before
+`afterWrite`. For project-wide save work such as syncing a form's lists (Ankpal `masterResource`
+`links` / `children`).
+
 ## After every write: `afterWrite`
 
 A service can override `protected afterWrite(c, event)`: called in the write's transaction after the

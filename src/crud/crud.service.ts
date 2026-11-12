@@ -187,6 +187,13 @@ export abstract class CrudService<
    */
   protected async afterWrite(_c: OpContext<M, Attrs, unknown, U>, _event: string): Promise<void> {}
 
+  /**
+   * After every create and update's steps, in its transaction, whether or not a column changed (a
+   * form's link rows may change alone): project-wide save work such as syncing a form's lists.
+   * Runs before `afterWrite`.
+   */
+  protected async afterSave(_c: OpContext<M, Attrs, unknown, U>): Promise<void> {}
+
   protected listInclude(_query: TQuery): Includeable[] {
     return [];
   }
@@ -437,6 +444,7 @@ export abstract class CrudService<
       await this.runSteps(c, confirmed, async () => {
         await c.row.save({ transaction: t });
       }, { builtIn: this.writeChecks('create', 'Create') });
+      await this.afterSave(c);
       await this.afterWrite(c, 'create');
       await this.record(t, ctx, c.row.get('id') as number, 'create', this.snapshot(c.row.get({ plain: true }) as Attrs));
       result = c.result;
@@ -459,6 +467,7 @@ export abstract class CrudService<
         c.row.set(this.updateStamps(ctx) as never);
         await c.row.save({ transaction: t });
       }, { builtIn: this.writeChecks('update', 'Edit') });
+      await this.afterSave(c);
       const changes = this.diff(c.row, before);
       if (Object.keys(changes).length) {
         await this.afterWrite(c, 'update');

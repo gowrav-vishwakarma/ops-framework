@@ -17,6 +17,9 @@ import type { Attrs } from './op-context.js';
 
 export type { Dependent } from './crud.service.js';
 
+/** Fields a request never sets: the row id, the partition and who created or changed the row. */
+const SYSTEM_FIELDS = ['id', 'createdById', 'updatedById', 'created_by_id', 'updated_by_id'] as const;
+
 /**
  * CRUD on a tenant's data: every query is pinned to the caller's company, permissions and audit
  * go through the configured `AclSource` and `AuditSink`. See `CrudService`.
@@ -54,6 +57,23 @@ export abstract class TenantCrudService<
 
   protected updateStamps(ctx: ReqCtx<AuthUser>): Attrs {
     return this.hasAttribute('updatedById') ? { updatedById: ctx.user.id } : {};
+  }
+
+  /** The DTO without the system fields (id, partition, created/updated by): a request cannot move a row to another company. */
+  protected withoutSystemFields(dto: object): Attrs {
+    const raw = { ...dto } as Attrs;
+    for (const field of [...SYSTEM_FIELDS, PARTITION.field, PARTITION.column]) delete raw[field];
+    return raw;
+  }
+
+  /** Attributes to store on create: the DTO without system fields. Override to map it. */
+  protected override async toCreate(_ctx: ReqCtx<AuthUser>, dto: TCreate, _t: Transaction): Promise<Attrs> {
+    return this.withoutSystemFields(dto);
+  }
+
+  /** Attributes to set on update: the DTO without system fields. Override to map it. */
+  protected override async toUpdate(_ctx: ReqCtx<AuthUser>, dto: TUpdate, _row: M, _t: Transaction): Promise<Attrs> {
+    return this.withoutSystemFields(dto);
   }
 
   /** A feature provider, or null when the project did not configure it. */

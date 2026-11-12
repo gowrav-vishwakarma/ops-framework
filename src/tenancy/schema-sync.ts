@@ -31,6 +31,7 @@ export interface SyncOptions {
 @Injectable()
 export class SchemaSync {
   private readonly logger = new Logger('SchemaSync');
+  private savepoints = 0;
   private readonly parity = new Map<string, Promise<void>>();
 
   constructor(
@@ -63,9 +64,28 @@ export class SchemaSync {
       markTx(t, { kind: 'control', dbKey: this.registry.controlKey });
       await sequelize.query(`SET LOCAL search_path TO ${quoteIdent(schema)}`, { transaction: t });
       await lockSchema(sequelize, schema, t);
-      for (const model of models) await model.sync({ alter: this.alter, transaction: t } as never);
+      for (const model of models) await this.syncModel(sequelize, model, t);
       if (fresh) await this.baseline(sequelize, schema, 'control', t);
     });
+  }
+
+  /**
+   * One model, in a savepoint: under `alter`, Sequelize re-adds a column or index Postgres already
+   * has (an index name truncated at 63 characters, a column it misreads); that is logged and the
+   * model is left as it is, instead of failing the whole schema.
+   */
+  private async syncModel(sequelize: Sequelize, model: { name: string; sync(options: object): Promise<unknown> }, t: Transaction): Promise<void> {
+    const savepoint = `sync_${++this.savepoints}`;
+    await sequelize.query(`SAVEPOINT ${savepoint}`, { transaction: t });
+    try {
+      await model.sync({ alter: this.alter, transaction: t });
+      await sequelize.query(`RELEASE SAVEPOINT ${savepoint}`, { transaction: t });
+    } catch (error) {
+      await sequelize.query(`ROLLBACK TO SAVEPOINT ${savepoint}`, { transaction: t });
+      const code = (error as { original?: { code?: string } }).original?.code;
+      if (code !== '42701' && code !== '42P07') throw error;
+      this.logger.warn(`${model.name}: ${(error as Error).message}; left as it is`);
+    }
   }
 
   /** A schema built from the models already has every migration's change. */
@@ -102,7 +122,7 @@ export class SchemaSync {
         markTx(t, { kind: 'tenant', dbKey });
         await sequelize.query(`SET LOCAL search_path TO ${quoteIdent(schema)}`, { transaction: t });
         await lockSchema(sequelize, schema, t);
-        for (const model of models) await model.sync({ alter: this.alter, transaction: t } as never);
+        for (const model of models) await this.syncModel(sequelize, model, t);
         if (fresh) await this.baseline(sequelize, schema, 'tenant', t);
       }),
     );

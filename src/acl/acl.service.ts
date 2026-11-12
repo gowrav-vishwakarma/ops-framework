@@ -21,8 +21,8 @@ const MAX_ENTRIES = 5_000;
  * The effective permissions of a user, from the configured `AclSource` (the framework's role tables,
  * or the project's own). Cached in process for a minute, keyed by
  * company, user, role and the role's ACL version, so editing a role takes effect on the next
- * refresh. Two companies never share a cache entry even when a user id repeats. `forgetUser` and
- * `forgetCompany` reach every process through the cluster bus.
+ * refresh. Two companies never share a cache entry even when a user id repeats. `forgetUser`,
+ * `forgetRole` and `forgetCompany` reach every process through the cluster bus.
  */
 @Injectable()
 export class AclService implements OnModuleInit {
@@ -34,9 +34,11 @@ export class AclService implements OnModuleInit {
   ) {}
 
   onModuleInit(): void {
-    this.bus?.subscribe<{ companyId: number; userId?: number }>(BUS_TOPICS.acl, ({ companyId, userId }) =>
-      userId === undefined ? this.drop(`${companyId}:`) : this.drop(`${companyId}:${userId}:`),
-    );
+    this.bus?.subscribe<{ companyId: number; userId?: number; roleId?: number }>(BUS_TOPICS.acl, ({ companyId, userId, roleId }) => {
+      if (roleId !== undefined) this.dropRole(companyId, roleId);
+      else if (userId === undefined) this.drop(`${companyId}:`);
+      else this.drop(`${companyId}:${userId}:`);
+    });
   }
 
   private key(companyId: number, userId: number, roleId: number | null, version: number): string {
@@ -59,10 +61,25 @@ export class AclService implements OnModuleInit {
     void this.bus?.publish(BUS_TOPICS.acl, { companyId, userId });
   }
 
+  /** Drop cached sets of every user holding one role of a company (after the role's permissions change), in every process. */
+  forgetRole(companyId: number, roleId: number): void {
+    this.dropRole(companyId, roleId);
+    void this.bus?.publish(BUS_TOPICS.acl, { companyId, roleId });
+  }
+
   /** Drop everything cached for a company (after a move or a bulk change), in every process. */
   forgetCompany(companyId: number): void {
     this.drop(`${companyId}:`);
     void this.bus?.publish(BUS_TOPICS.acl, { companyId });
+  }
+
+  private dropRole(companyId: number, roleId: number): void {
+    const company = String(companyId);
+    const role = String(roleId);
+    for (const key of this.cache.keys()) {
+      const [keyCompany, , keyRole] = key.split(':');
+      if (keyCompany === company && keyRole === role) this.cache.delete(key);
+    }
   }
 
   private drop(prefix: string): void {

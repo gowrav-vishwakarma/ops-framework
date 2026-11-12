@@ -126,7 +126,7 @@ export default execute<Trip>({
 - A collection action uses `collectionExecute({ run(c, original) {...} })`.
 - An `@Injectable()` class with a `run(c, original)` method works too, with constructor injection.
 
-`toCreate` and `toUpdate` in the service decide which form fields land on the row before create or update saves.
+`toCreate` and `toUpdate` in the service decide which form fields land on the row before create or update saves. On a `TenantCrudService` the defaults are the DTO without system fields (`withoutSystemFields`: `id`, the partition field and column, `createdById`/`updatedById` in both spellings), so a request can never move a row to another company; an override that maps the DTO itself should start from `withoutSystemFields(dto)` or `super.toUpdate(...)`.
 
 ## Issues and state
 
@@ -236,6 +236,7 @@ The options (`FrameworkOptions`) carry the rest:
 | --- | --- |
 | `catalog`, `scopes` | permissions (resource, action, scopes, limits) and scope providers beyond `all`, `branch`, `own` |
 | `acl.actionNames`, `acl.code` | how permission codes are spelled: the framework asks for `list`, `view`, `create`, `update`, `delete`, `restore` and action names (Ankpal: `{ list: 'page', update: 'edit' }`); default code `${resource}.${action}`, `list` defaults to `view` |
+| `acl.userStatusColumn` | `features.acl: 'tables'`: a column of `NAMES.userTable` (`'status'`); a user whose value there is not `'active'` is refused (403) when permissions load. Off by default; cached with the permissions, so call `AclService.forgetUser` after changing it (TMS: the users save step) |
 | `tenancy.partition`, `resolve`, `placement`, `sharedSchema` | partition, user to tenant (default `{ companyId, tenantKey }`), `single` / `schemaPerTenant` / `routed` |
 | `tenancy.headers` | headers checked against the token (default `x-company-id` -> companyId, `x-tenant-id` -> tenantKey or companyId); a mismatch is 403 |
 | `auth.userClaims`, `jwtSecret`, `issuer`, `audience`, `tokenKind`, `epoch`, TTLs | claims to `AuthUser`, verification, token kind (default: `typ`, else a company token when it carries the partition field), `epoch: 'required'` to refuse tokens of a moved company (TMS) |
@@ -337,7 +338,7 @@ A contract answered in the process is called in process; otherwise over internal
 
 ## Migrations
 
-`sync` (`DB_SYNC=alter`) is for local development only and is refused when `NODE_ENV=production`. Schemas change through migrations:
+`sync` (`DB_SYNC=alter`) is for local development only and is refused when `NODE_ENV=production`. Each model syncs in a savepoint: when `alter` tries to add a column or index Postgres already has (`42701`, `42P07`, such as an index name truncated at 63 characters), that model is logged and left as it is instead of failing the schema. Schemas change through migrations:
 
 - `src/migrations/control/` runs once on the control plane; `src/migrations/tenant/` in every tenant place (every distinct database and schema in `tenant_routing`). Files are `YYYYMMDDHHMMSS-name.ts`, default-exporting `migration({ up({ qi, t, schema }), down? })`. `qi` is pinned to the schema; pass `{ transaction: t }`. Write migrations against the database, never through models.
 - `npm run migrate:new -- tenant add-vehicle-color` creates a file; `npm run migrate` applies everything (control first; a failing tenant place is reported, the others continue; the job exits non-zero); `npm run migrate:status` lists what is pending; `--only`, `--db`, `--schema` narrow a run; `migrate undo` reverts one schema's last migration locally.
@@ -381,7 +382,7 @@ export const activeOnlyScope: ScopeDef = {
 };
 ```
 
-A scope id nobody provides denies. The effective permission set is cached per `company:user:role:av`; changing a role or override bumps the version.
+A scope id nobody provides denies. The effective permission set is cached per `company:user:role:av`; changing a role or override bumps the version. `AclService.forgetUser(companyId, userId)`, `forgetRole(companyId, roleId)` (every user holding the role, after its permissions are edited) and `forgetCompany(companyId)` drop cached sets in every process, through the cluster bus.
 
 **Limits** cap what a grant allows (approve up to an amount). A service declares them on `create`, `update`, `delete` (`protected readonly limits = { update: [AMOUNT] }`), and an action declares `limits: [...]`:
 

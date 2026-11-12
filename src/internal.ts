@@ -22,6 +22,7 @@ export * from './tenancy/context.js';
 export * from './tenancy/guards.js';
 export * from './tenancy/move/move-company.js';
 export * from './tenancy/placement.js';
+export * from './tenancy/ref-graph.js';
 export * from './tenancy/schema-sync.js';
 export * from './tenancy/tenant-db.js';
 export * from './tenancy/transaction.js';

@@ -37,4 +37,29 @@ describe('ACL cache', () => {
     await acl.effective(user(2, 5));
     expect(loads.map((l) => l.companyId)).toEqual([1, 2, 1, 2]);
   });
+
+  it('forgetRole drops cached entries for that role in that company', async () => {
+    const { acl, loads } = service();
+    await acl.effective(user(1, 5));
+    await acl.effective(user(2, 5));
+    acl.forgetRole(1, 3);
+    await acl.effective(user(1, 5));
+    await acl.effective(user(2, 5));
+    expect(loads.map((l) => l.companyId)).toEqual([1, 2, 1]);
+  });
+
+  it('acl.userStatusColumn refuses a user whose row is not active', async () => {
+    const db = {
+      query: async (sql: string) => (sql.includes('FROM "users"') ? [{ status: 'inactive' }] : []),
+    };
+    const acl = new AclService(new TableAclSource(db as never, { acl: { userStatusColumn: 'status' } }));
+    await expect(acl.effective(user(1, 5))).rejects.toThrow('Your account in this company is inactive');
+  });
+
+  it('without acl.userStatusColumn the user row is not read', async () => {
+    const seen: string[] = [];
+    const db = { query: async (sql: string) => (seen.push(sql), []) };
+    await new AclService(new TableAclSource(db as never)).effective(user(1, 5));
+    expect(seen.some((sql) => sql.includes('"users"'))).toBe(false);
+  });
 });

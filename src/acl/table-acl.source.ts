@@ -1,7 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import { ForbiddenException, Inject, Injectable, Optional } from '@nestjs/common';
 import type { Transaction } from 'sequelize';
 import type { AclScope, AuthUser, Limits } from '../auth/auth-user.js';
 import type { AclSource } from '../features.js';
+import { NAMES } from '../naming.js';
+import { FRAMEWORK_OPTIONS, type FrameworkOptions } from '../options.js';
+import { quoteIdent } from '../tenancy/context.js';
+import { PARTITION } from '../tenancy/partition.js';
 import { TenantDb } from '../tenancy/tenant-db.js';
 import type { EffectivePermissions } from './acl.service.js';
 
@@ -11,10 +15,14 @@ import type { EffectivePermissions } from './acl.service.js';
  */
 @Injectable()
 export class TableAclSource implements AclSource {
-  constructor(private readonly db: TenantDb) {}
+  constructor(
+    private readonly db: TenantDb,
+    @Optional() @Inject(FRAMEWORK_OPTIONS) private readonly options?: Pick<FrameworkOptions, 'acl'>,
+  ) {}
 
   async load(user: AuthUser, t?: Transaction): Promise<EffectivePermissions> {
     const { companyId, id: userId, roleId } = user;
+    await this.requireActive(user, t);
     const out: EffectivePermissions = new Map();
     if (roleId) {
       const rows = await this.db.query<{ code: string; scope: AclScope; limits: Limits | null }>(
@@ -37,5 +45,17 @@ export class TableAclSource implements AclSource {
       else out.set(row.code, { scope: row.scope, limits: row.limits ?? {} });
     }
     return out;
+  }
+
+  /** `acl.userStatusColumn`: refuse a user whose row is not active. */
+  private async requireActive({ companyId, id: userId }: AuthUser, t?: Transaction): Promise<void> {
+    const column = this.options?.acl?.userStatusColumn;
+    if (!column || !userId) return;
+    const rows = await this.db.query<{ status: string }>(
+      `SELECT ${quoteIdent(column)} AS status FROM ${quoteIdent(NAMES.userTable)} WHERE id = :userId AND ${quoteIdent(PARTITION.column)} = :companyId`,
+      { replacements: { userId, companyId }, transaction: t },
+    );
+    const status = rows[0]?.status;
+    if (status !== undefined && status !== 'active') throw new ForbiddenException(`Your account in this company is ${status}`);
   }
 }

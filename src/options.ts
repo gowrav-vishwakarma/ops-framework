@@ -28,6 +28,12 @@ export interface FrameworkOptions {
   acl?: {
     actionNames?: Record<string, string>;
     code?: (resource: string, action: string) => string;
+    /**
+     * `features.acl: 'tables'`: a column of `NAMES.userTable` holding the user's status (`'status'`).
+     * When set, a user whose row there is not `'active'` is refused (403) when permissions load.
+     * Cached with the permissions: call `AclService.forgetUser` after changing it.
+     */
+    userStatusColumn?: string;
   };
   /** Request, SQL and step logging (see `LoggingOptions`). Default: one start and one finish line per request. */
   logging?: LoggingOptions;

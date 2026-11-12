@@ -1,5 +1,6 @@
 import { type DynamicModule, Global, type MiddlewareConsumer, Module, type NestModule, type InjectionToken, type ModuleMetadata, type OptionalFactoryDependency, type Provider, type Type } from '@nestjs/common';
-import { APP_GUARD, DiscoveryModule } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD, DiscoveryModule } from '@nestjs/core';
+import { ErrorAnswerFilter } from './database-errors.js';
 import { JwtService } from '@nestjs/jwt';
 import { getModelToken, SequelizeModule } from '@nestjs/sequelize';
 import { ClsModule } from 'nestjs-cls';
@@ -221,8 +222,10 @@ export class FrameworkModule implements NestModule {
       { provide: APP_GUARD, useExisting: JwtAuthGuard },
       { provide: APP_GUARD, useExisting: TenantContextGuard },
       { provide: APP_GUARD, useExisting: PermissionGuard },
+      // Database refusals as answers the user can act on; anything unexpected as a 500 with a reference.
+      { provide: APP_FILTER, useClass: ErrorAnswerFilter },
     ];
-    const exported = providers.flatMap((p) => (typeof p === 'function' ? [p] : 'provide' in p && p.provide !== APP_GUARD ? [p.provide] : []));
+    const exported = providers.flatMap((p) => (typeof p === 'function' ? [p] : 'provide' in p && p.provide !== APP_GUARD && p.provide !== APP_FILTER ? [p.provide] : []));
     return {
       module: FrameworkModule,
       global: true,

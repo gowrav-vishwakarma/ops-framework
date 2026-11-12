@@ -188,6 +188,24 @@ An action also says how the UI shows it. All fields are optional and travel in `
 
 `GET /<resource>?actions=1` adds `_actions` to every row: `{ <name>: { allowed, reason } }`, one entry per action the caller holds plus `update` and `delete`. `allowed` is false with a reason when the row is in the wrong state (`from`), outside the caller's scope, refused by a row guard (a locked period), over a limit or soft deleted, or when `available` says no. It is a hint for buttons; the steps still decide.
 
+## After every write: `afterWrite`
+
+A service can override `protected afterWrite(c, event)`: called in the write's transaction after the
+steps of every create, update (when something changed), delete and row or bulk action, with the
+operation context (`c.row`, `c.t`, `c.ctx`, `c.afterCommit`). For a project's cross-cutting write on
+every entity (Ankpal's master audit); a rule of one entity stays a step in `ops/`.
+
+## Errors the client sees
+
+A global filter (`ErrorAnswerFilter`, `database-errors.ts`) answers every error:
+- an `HttpException` (issues 422/409, `NotFoundException`...) as thrown;
+- a database refusal as something the user can act on (`databaseErrorAnswer`): unique → 422
+  `<field> already exists`; a link to a missing row → 422 on the field; a row still in use → 409
+  `in_use`; required / too long / out of range / badly formed → 422 on the column; a statement
+  timeout → 503; a deadlock or serialization conflict → 409 "try again";
+- anything else → 500 `{ message, reference }`. The SQL, the stack and the message stay in the log
+  under that reference; nothing internal reaches the client.
+
 ## Lists and views
 
 A `list/` before step pushes onto `c.where`, `c.include`, or `c.order`. An after step reads `c.rows` and may `row.setDataValue('activeUserCount', n)`.
@@ -244,7 +262,9 @@ The options (`FrameworkOptions`) carry the rest:
 | `schemaParity` | `block` (503, default when owned), `warn` (logged once per schema, default when external), `off` |
 | `refs.undeclared` | undeclared id columns when building a schema: `error`, `warn` (default), `off` |
 | `redis`, `services`, `admin` | as before |
-| `logging.http` | `off`, `basic` (default: a `request.start` and a `request.finish` line per request, as JSON under `HTTP`: method, URL, company, tenant, user, status, ms), `verbose` (also the payload and the response body, errors included). Passwords are `[REDACTED]`, tokens cut to their start (`logging.redact` adds keys); bodies cut at `logging.bodyLimit` (4000); `logging.skip` paths are not logged (`/api/health`) |
+| `logging.http` | `off`, `basic` (default: a `request.start` and a `request.finish` line per request, as JSON under `HTTP`: method, URL, company, tenant, user, status, ms, and `queries`: the SQL statements the request sent on every pool), `verbose` (also the payload and the response body, errors included). Passwords are `[REDACTED]`, tokens cut to their start (`logging.redact` adds keys); bodies cut at `logging.bodyLimit` (4000); `logging.skip` paths are not logged (`/api/health`) |
+| `logging.queryHeader` | `true`: every answer carries `x-ops-queries` (statements the request sent) and `x-ops-ms` (time in the server), counted per request by the query guard. For development and test servers (a performance harness reads them); default off |
+| `logging.queryCapture` | a folder: every distinct statement (by its shape: literals and placeholders out) is saved once per schema as `<dir>/<schema>/<hash>.json` with the SQL as run and its `bind` / `replacements`, for a script that `EXPLAIN`s them in every schema (missing indexes, slow plans). Never fails a query. Development and test servers only; default off |
 | `logging.sql`, `logging.steps` | every SQL statement with its time, on every pool (`SQL:<dbKey>`, debug level; `sqlLogger(options, 'primary')` for the app's own connection), and each step and flow file with its time (debug; `OPS_TRACE=1` too) |
 
 ## Tenancy

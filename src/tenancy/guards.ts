@@ -4,6 +4,7 @@ import type { Sequelize } from 'sequelize-typescript';
 import { currentTenant } from './context.js';
 import { NAMES } from '../naming.js';
 import { isControlModel } from './model-binding.js';
+import { countQuery } from '../logging/query-stats.js';
 
 /** What a transaction was opened for. Set by `TenantDb` and `ControlPlane`, read by the guards. */
 export interface TxMark {
@@ -46,6 +47,7 @@ function targetModel(options: QueryOptions) {
 export function installQueryGuards(sequelize: Sequelize, dbKey: string, onQuery?: () => void): void {
   sequelize.addHook('beforeQuery' as never, ((options: QueryOptions, query: QueryLike) => {
     onQuery?.();
+    countQuery();
     const mark = txMark(options.transaction);
     const model = targetModel(options);
     const control = model ? isControlModel(model) : query?.sql?.includes(`"${NAMES.controlSchema}".`) === true;

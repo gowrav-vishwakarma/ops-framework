@@ -3,6 +3,7 @@ import { InjectConnection } from '@nestjs/sequelize';
 import { QueryTypes } from 'sequelize';
 import { Sequelize } from 'sequelize-typescript';
 import { NAMES } from '../naming.js';
+import { installQueryCapture } from '../logging/query-capture.js';
 import { sqlLogger } from '../logging/request-log.js';
 import { FRAMEWORK_OPTIONS, type FrameworkOptions } from '../options.js';
 import { FRAMEWORK_FEATURES, PLACEMENT_STORE, type PlacementStore, type ResolvedFeatures } from '../features.js';
@@ -107,6 +108,7 @@ export class ConnectionRegistry implements OnModuleDestroy, OnModuleInit {
   private guard(sequelize: Sequelize, dbKey: string, onQuery?: () => void): void {
     installQueryGuards(sequelize, dbKey, onQuery);
     if (this.features?.schema === 'external') installDdlGuard(sequelize, dbKey);
+    if (this.options.logging?.queryCapture) installQueryCapture(sequelize, dbKey, this.options.logging.queryCapture);
   }
 
   private toucher(dbKey: string): () => void {

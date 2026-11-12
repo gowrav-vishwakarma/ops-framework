@@ -180,6 +180,13 @@ export abstract class CrudService<
     }
   }
 
+  /**
+   * After the steps of a create, update (with changes), delete or row action, in its transaction:
+   * a project's cross-cutting write (Ankpal's master audit). `event`: `create` | `update` | `delete`
+   * | `action:<name>`. Default: nothing.
+   */
+  protected async afterWrite(_c: OpContext<M, Attrs, unknown, U>, _event: string): Promise<void> {}
+
   protected listInclude(_query: TQuery): Includeable[] {
     return [];
   }
@@ -430,6 +437,7 @@ export abstract class CrudService<
       await this.runSteps(c, confirmed, async () => {
         await c.row.save({ transaction: t });
       }, { builtIn: this.writeChecks('create', 'Create') });
+      await this.afterWrite(c, 'create');
       await this.record(t, ctx, c.row.get('id') as number, 'create', this.snapshot(c.row.get({ plain: true }) as Attrs));
       result = c.result;
       return c.row.get('id') as number;
@@ -452,7 +460,10 @@ export abstract class CrudService<
         await c.row.save({ transaction: t });
       }, { builtIn: this.writeChecks('update', 'Edit') });
       const changes = this.diff(c.row, before);
-      if (Object.keys(changes).length) await this.record(t, ctx, id, 'update', changes);
+      if (Object.keys(changes).length) {
+        await this.afterWrite(c, 'update');
+        await this.record(t, ctx, id, 'update', changes);
+      }
       result = c.result;
     });
     return result !== undefined ? result : this.get(ctx, id, outer);
@@ -465,6 +476,7 @@ export abstract class CrudService<
       const c = this.rowContext('delete', ctx, t, row, { ...row.get({ plain: true }) } as Attrs, {});
       await this.checkDependents(row, t, c.issues);
       await this.runSteps(c, confirmed, () => c.row.destroy({ transaction: t }), { builtIn: this.writeChecks('delete', 'Delete') });
+      await this.afterWrite(c, 'delete');
       await this.record(t, ctx, id, 'delete', null);
       result = c.result;
     });
@@ -562,6 +574,7 @@ export abstract class CrudService<
         failMessage: `${action.label} is not possible`,
         builtIn: this.actionChecks(action),
       });
+      await this.afterWrite(c, `action:${action.name}`);
       await this.record(t, ctx, id, `action:${action.name}`, this.snapshot(input));
       result = c.result;
     });
@@ -622,6 +635,7 @@ export abstract class CrudService<
         await this.runPhase(c, 'before');
         await this.runMain(c, async () => action.run?.(c));
         await this.runPhase(c, 'after');
+        await this.afterWrite(c, `action:${action.name}`);
         await this.record(t, ctx, c.row.get('id') as number, `action:${action.name}`, { ...this.snapshot(input), bulk: ids.length });
         if (c.result !== undefined) results.push(c.result);
       }

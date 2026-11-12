@@ -1,6 +1,7 @@
 import { Injectable, InternalServerErrorException, UnprocessableEntityException } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
-import { Op, type Transaction, type WhereOptions } from 'sequelize';
+import { literal, Op, QueryTypes, Utils, type Transaction, type WhereOptions } from 'sequelize';
+import { PARTITION } from '../tenancy/partition.js';
 import type { Model, ModelCtor } from 'sequelize-typescript';
 import { ScopeRegistry } from '../acl/scope-registry.js';
 import type { Actor, ReqCtx } from '../auth/auth-user.js';
@@ -35,6 +36,12 @@ export abstract class FlowDb {
   abstract findOne(t: Transaction, access: FlowAccess, model: string, where: Row, attributes?: string[]): Promise<Row | null>;
   abstract findAll(t: Transaction, access: FlowAccess, model: string, where: Row, options?: { attributes?: string[]; limit?: number }): Promise<Row[]>;
   abstract count(t: Transaction, access: FlowAccess, model: string, where: WhereOptions): Promise<number>;
+  /** Whether each probe finds a row, in probe order. Default: one count each; the framework's: one statement. */
+  async existsEach(t: Transaction, access: FlowAccess, probes: Array<{ model: string; where: WhereOptions }>): Promise<boolean[]> {
+    const found: boolean[] = [];
+    for (const probe of probes) found.push((await this.count(t, access, probe.model, probe.where)) > 0);
+    return found;
+  }
   abstract create(t: Transaction, access: FlowAccess, model: string, values: Row): Promise<Row>;
   /** Many new rows in one insert; the saved rows come back in the same order. */
   abstract createMany(t: Transaction, access: FlowAccess, model: string, rows: Row[]): Promise<Row[]>;
@@ -111,6 +118,28 @@ export class SequelizeFlowDb extends FlowDb {
   count(t: Transaction, access: FlowAccess, model: string, where: WhereOptions): Promise<number> {
     const m = this.model(model, t);
     return m.count({ where: this.scoped(access, m, where), transaction: t });
+  }
+
+  /**
+   * One statement for every probe: `SELECT i WHERE EXISTS (SELECT 1 FROM … LIMIT 1) UNION ALL …`.
+   * EXISTS stops at the first row (a count reads them all), and N probes are one round trip. Each
+   * probe is pinned to the tenant's partition, as a model count is by its hook.
+   */
+  async existsEach(t: Transaction, access: FlowAccess, probes: Array<{ model: string; where: WhereOptions }>): Promise<boolean[]> {
+    if (probes.length === 0) return [];
+    const sequelize = sequelizeOf(t);
+    const generator = (sequelize.getQueryInterface() as unknown as { queryGenerator: { selectQuery(table: unknown, options: object, model: unknown): string } }).queryGenerator;
+    const partition = currentTenant()?.ref.companyId;
+    const parts = probes.map((probe, i) => {
+      const m = this.model(probe.model, t);
+      const pinned = PARTITION.field in m.getAttributes() && !PARTITION.exempt.includes(m.name) && partition ? { [Op.and]: [probe.where, { [PARTITION.field]: partition }] } : probe.where;
+      const options = Utils.mapOptionFieldNames({ attributes: [[literal('1'), 'x']], where: this.scoped(access, m, pinned as WhereOptions), limit: 1 } as never, m as never);
+      const select = generator.selectQuery(m.getTableName(), options, m).replace(/;\s*$/, '');
+      return `SELECT ${i} AS hit WHERE EXISTS (${select})`;
+    });
+    const rows = await sequelize.query<{ hit: number }>(parts.join(' UNION ALL '), { type: QueryTypes.SELECT, transaction: t });
+    const hits = new Set(rows.map((row) => Number(row.hit)));
+    return probes.map((_probe, i) => hits.has(i));
   }
 
   /**

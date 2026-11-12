@@ -113,3 +113,5 @@ export * from './flow/index.js';
 export * from './expr/index.js';
 export * from './acl/scope-registry.js';
 export * from './logging/request-log.js';
+export { databaseErrorAnswer, ErrorAnswerFilter } from './database-errors.js';
+export { installQueryCapture, queryShape } from './logging/query-capture.js';

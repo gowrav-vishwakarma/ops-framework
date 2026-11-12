@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger, type NestMiddleware } from '@nestjs/common'
 import type { NextFunction, Request, Response } from 'express';
 import type { CtxRequest } from '../auth/decorators.js';
 import { FRAMEWORK_OPTIONS, type FrameworkOptions } from '../options.js';
+import { currentQueryStats, withQueryStats } from './query-stats.js';
 
 /** What the server writes about each request (`FrameworkOptions.logging`). */
 export interface LoggingOptions {
@@ -20,6 +21,16 @@ export interface LoggingOptions {
   redact?: { hide?: string[]; shorten?: string[] };
   /** Paths never logged (health checks). Default `['/api/health']`. */
   skip?: string[];
+  /**
+   * Every answer carries `x-ops-queries` (SQL statements the request sent) and `x-ops-ms` (time in
+   * the server). For development and test servers (the scenario runner reads them). Default false.
+   */
+  queryHeader?: boolean;
+  /**
+   * A folder: every distinct statement is saved once per schema there (`query-capture.ts`), for a
+   * script to `EXPLAIN` in every schema. Development and test servers only. Default off.
+   */
+  queryCapture?: string;
 }
 
 const HIDE = ['password', 'newPassword', 'oldPassword', 'secret', 'otp'];
@@ -60,6 +71,7 @@ export class RequestLogMiddleware implements NestMiddleware {
   private readonly hide: ReadonlySet<string>;
   private readonly shorten: ReadonlySet<string>;
   private readonly skip: ReadonlySet<string>;
+  private readonly queryHeader: boolean;
 
   constructor(@Inject(FRAMEWORK_OPTIONS) options: FrameworkOptions) {
     const logging = options.logging ?? {};
@@ -68,12 +80,30 @@ export class RequestLogMiddleware implements NestMiddleware {
     this.hide = new Set([...HIDE, ...(logging.redact?.hide ?? [])]);
     this.shorten = new Set([...SHORTEN, ...(logging.redact?.shorten ?? [])]);
     this.skip = new Set(logging.skip ?? ['/api/health']);
+    this.queryHeader = logging.queryHeader === true;
   }
 
   use(req: Request & CtxRequest, res: Response, next: NextFunction): void {
+    withQueryStats(() => this.handle(req, res, next));
+  }
+
+  private handle(req: Request & CtxRequest, res: Response, next: NextFunction): void {
     const path = (req.originalUrl || req.url).split('?')[0] ?? '';
-    if (this.mode === 'off' || this.skip.has(path)) return next();
     const started = performance.now();
+    // Held here: response events may run outside the request's async context.
+    const stats = currentQueryStats();
+    if (this.queryHeader) {
+      // Set just before the body goes out: the counter then holds every query of the request.
+      const writeHead = res.writeHead.bind(res);
+      res.writeHead = ((...args: Parameters<Response['writeHead']>) => {
+        if (!res.headersSent) {
+          res.setHeader('x-ops-queries', String(stats?.queries ?? 0));
+          res.setHeader('x-ops-ms', String(Math.round(performance.now() - started)));
+        }
+        return writeHead(...args);
+      }) as Response['writeHead'];
+    }
+    if (this.mode === 'off' || this.skip.has(path)) return next();
     const verbose = this.mode === 'verbose';
     const base = { method: req.method, url: req.originalUrl || req.url };
     const start: Record<string, unknown> = { event: 'request.start', ...base };
@@ -92,7 +122,7 @@ export class RequestLogMiddleware implements NestMiddleware {
     }
     res.on('finish', () => {
       const user = req.user as { id?: number; companyId?: number; tenantKey?: string | null } | undefined;
-      const finish: Record<string, unknown> = { event: 'request.finish', ...base, statusCode: res.statusCode, durationMs: Math.round(performance.now() - started) };
+      const finish: Record<string, unknown> = { event: 'request.finish', ...base, statusCode: res.statusCode, durationMs: Math.round(performance.now() - started), queries: stats?.queries ?? 0 };
       if (user?.companyId) finish.companyId = user.companyId;
       if (user?.tenantKey) finish.tenantId = user.tenantKey;
       if (user?.id) finish.userId = user.id;

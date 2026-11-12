@@ -333,13 +333,15 @@ export const Flow = {
         : 'notReferenced needs probes',
     run: async (run, a) => {
       const value = run.value(a.value ?? 'row.id');
-      for (const probe of a.probes) {
-        const count = await run.db.count(run.t, run.access(true), probe.model, {
-          [probe.field]: value,
-          ...run.values(probe.where),
-        } as WhereOptions);
-        if (count > 0) run.block(a.code ?? 'in_use', run.text(probe.message));
-      }
+      // Every probe in one statement; every table that holds a reference is reported.
+      const found = await run.db.existsEach(
+        run.t,
+        run.access(true),
+        a.probes.map((probe) => ({ model: probe.model, where: { [probe.field]: value, ...run.values(probe.where) } as WhereOptions })),
+      );
+      a.probes.forEach((probe, i) => {
+        if (found[i]) run.block(a.code ?? 'in_use', run.text(probe.message));
+      });
     },
     describe: (a) =>
       `not referenced by ${a.probes.map((p) => `${p.model}.${p.field}`).join(', ')}`,

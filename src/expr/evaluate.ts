@@ -18,7 +18,8 @@ const isNull = (value: unknown) => value === null || value === undefined;
 /** Postgres DECIMAL arrives as a string: numeric text on one side of a number compares as a number. */
 function numeric(value: unknown): number | null {
   if (typeof value === 'number') return Number.isFinite(value) ? value : null;
-  if (typeof value === 'string' && value.trim() !== '' && !Number.isNaN(Number(value))) return Number(value);
+  // Decimal text only (Postgres refuses '0x10', '0b11', 'Infinity').
+  if (typeof value === 'string' && /^\s*[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?\s*$/.test(value)) return Number(value);
   if (typeof value === 'boolean') return value ? 1 : 0;
   return null;
 }
@@ -56,11 +57,12 @@ const truth = (value: unknown): boolean | null => (isNull(value) ? null : Boolea
 function pick(item: unknown, path: unknown): unknown {
   let value = item;
   for (const key of String(path ?? '').split('.').filter(Boolean)) {
-    if (value === null || value === undefined) return undefined;
+    if (value === null || value === undefined) return null;
     const get = (value as { get?: (k: string) => unknown }).get;
-    value = typeof get === 'function' ? get.call(value, key) : (value as Record<string, unknown>)[key];
+    // Own fields only: never `constructor`, `__proto__` or other inherited JavaScript internals.
+    value = typeof get === 'function' ? get.call(value, key) : typeof value === 'object' && Object.hasOwn(value as object, key) ? (value as Record<string, unknown>)[key] : undefined;
   }
-  return value;
+  return value ?? null;
 }
 const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : isNull(value) ? [] : [value]);
 /** Items of a list, or the values at `path` of each item. */
@@ -78,11 +80,16 @@ const FUNCTIONS = new Map<string, ExpressionFunction>(
     round: {
       min: 1,
       max: 2,
+      // Half away from zero on the decimal digits, as Postgres numeric does (4.015 -> 4.02, -2.5 -> -3).
       run: ([a, d]) => {
         const n = numeric(a);
         if (n === null) return null;
-        const f = 10 ** (numeric(d) ?? 0);
-        return Math.round((n + Number.EPSILON * Math.sign(n)) * f) / f;
+        const places = Math.trunc(numeric(d) ?? 0);
+        const abs = Math.abs(n);
+        const shifted = String(abs).includes('e') ? abs * 10 ** places : Number(`${abs}e${places}`);
+        const rounded = Math.round(shifted);
+        const back = String(rounded).includes('e') ? rounded / 10 ** places : Number(`${rounded}e${-places}`);
+        return Math.sign(n) * back || 0;
       },
     },
     floor: { min: 1, max: 1, run: ([a]) => (numeric(a) === null ? null : Math.floor(numeric(a)!)) },

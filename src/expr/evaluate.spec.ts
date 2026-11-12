@@ -53,7 +53,7 @@ describe('expressions', () => {
     expect(run('count(data.items)', { data: { items } })).toBe(3);
     expect(run("count(data.items, 'isService')", { data: { items } })).toBe(1);
     expect(run("sum(data.items, 'qty')", { data: { items } })).toBe(6.5);
-    expect(run("pluck(data.items, 'batch.id')", { data: { items } })).toEqual([4, 4, undefined]);
+    expect(run("pluck(data.items, 'batch.id')", { data: { items } })).toEqual([4, 4, null]);
     expect(run("distinct(data.items, 'batch.id')", { data: { items } })).toEqual([4]);
     expect(run("any(data.items, 'isService')", { data: { items } })).toBe(true);
     expect(run("every(data.items, 'qty')", { data: { items } })).toBe(true);

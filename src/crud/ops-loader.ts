@@ -83,7 +83,8 @@ const fail = (root: string, path: string, message: string): never => {
  * a duplicate number, a number outside its phase's band, a step implementing the wrong phase,
  * or a folder that is no operation of this entity stops the app at boot instead of being skipped.
  * `500-execute.ts` (at most one per operation) replaces the operation's main change.
- * Other files not starting with a digit and sub-folders are helpers (`_state.ts`, `_shared/`) and are left alone.
+ * Other files not starting with a digit and sub-folders are helpers (`_state.ts`, `_shared/`) and are left alone,
+ * and so are folders of `ops/` starting with `_` (`ops/_shared/`).
  */
 export async function loadOps(root: string | null, moduleRef: ModuleRef, actionNames: readonly string[], model?: FlowPlace['model']): Promise<OpsRegistry> {
   if (!root || !existsSync(root)) return new OpsRegistry();
@@ -93,6 +94,8 @@ export async function loadOps(root: string | null, moduleRef: ModuleRef, actionN
 
   for (const entry of readdirSync(root, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
+    // `_shared/`, `_examples/`...: helpers next to the operations, never loaded as one.
+    if (entry.name.startsWith('_')) continue;
     if (!allowed.has(entry.name) && !NAMED_OP.test(entry.name)) {
       fail(root, entry.name, `no such operation; expected one of ${[...allowed].join(', ')}, list-<view> or view-<name>`);
     }

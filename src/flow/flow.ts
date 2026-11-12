@@ -46,7 +46,7 @@ export function declaredNames(steps: readonly FlowStep[]): Set<string> {
       if (args.kind === 'let' && args.values && typeof args.values === 'object') for (const key of Object.keys(args.values)) names.add(key);
       const kind = stepKind(String(args.kind));
       for (const name of kind?.names?.(args as never) ?? []) names.add(name);
-      for (const nested of kind?.children?.(args as never) ?? []) visit(nested);
+      for (const nested of kind?.children?.(args as never) ?? []) if (Array.isArray(nested)) visit(nested);
     }
   };
   visit(steps);
@@ -89,7 +89,7 @@ function check(steps: readonly FlowStep[], phase: Phase, target: Exclude<StepTar
     for (const name of kind.fields?.(args) ?? []) field(at, name, name);
     const problem = kind.validate?.(args);
     if (problem) throw new Error(`${at}: ${problem}`);
-    if (name === 'call' && typeof args.method === 'string' && !methods[args.method]) throw new Error(`${at}: no method "${args.method}" in this flow`);
+    if (name === 'call' && typeof args.method === 'string' && !Object.hasOwn(methods, args.method)) throw new Error(`${at}: no method "${args.method}" in this flow`);
     const line = `${describe ?? kind.describe(args)}${when ? ` (when ${when})` : ''}${unless ? ` (unless ${unless})` : ''}`;
     const nested = (kind.children?.(args) ?? []).flatMap((list, n) => check(list, phase, target, methods, `${at}.${n}`, model, declared).map((child) => `  ${child}`));
     return [line, ...nested];

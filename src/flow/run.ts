@@ -34,7 +34,9 @@ export interface FlowContext {
 export function rowValue(row: unknown, field: string): unknown {
   if (!row || typeof row !== 'object') return undefined;
   const get = (row as { get?: (key: string) => unknown }).get;
-  return typeof get === 'function' ? get.call(row, field) : (row as Row)[field];
+  if (typeof get === 'function') return get.call(row, field);
+  // Own fields only: never `constructor`, `__proto__` or other inherited JavaScript internals.
+  return Object.hasOwn(row, field) ? (row as Row)[field] : undefined;
 }
 
 function setRowValue(row: unknown, field: string, value: unknown): void {
@@ -121,6 +123,21 @@ export class FlowRun {
 
   cond(arg: string | undefined): boolean {
     return arg === undefined ? true : isTrue(this.value(arg));
+  }
+
+  /**
+   * A `where` map: `missing` when an expression gives no value (null or undefined), so a lookup on
+   * it finds nothing instead of matching `IS NULL`. A literal `null` stays a condition on null.
+   */
+  whereValues(map: Record<string, unknown> | undefined): { where: Row; missing: boolean } {
+    const where: Row = {};
+    let missing = false;
+    for (const [key, arg] of Object.entries(map ?? {})) {
+      const value = this.value(arg);
+      if (value === undefined || (typeof arg === 'string' && value === null)) missing = true;
+      where[key] = value;
+    }
+    return { where, missing };
   }
 
   values(map: Record<string, unknown> | undefined): Row {

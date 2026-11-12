@@ -173,8 +173,15 @@ const isRefusal = (error: unknown) => {
     (error as { status?: number })?.status;
   return typeof status === 'number' && status >= 400 && status < 500;
 };
-const hasMissing = (where: Row) =>
-  Object.values(where).some((value) => value === undefined);
+/** The `{...}` parts of a message template, checked at boot like any expression. */
+const templateExprs = (...texts: Array<string | undefined>): string[] =>
+  texts.flatMap((text) =>
+    typeof text === 'string'
+      ? [...text.matchAll(/\{([^{}]+)\}/g)].map((m) => m[1]!.trim())
+      : [],
+  );
+/** Path segments that would reach JavaScript internals instead of data. */
+const UNSAFE_SEGMENTS = new Set(['__proto__', 'prototype', 'constructor']);
 /** `values` as a map of expressions, or one expression giving the whole object (built by a method). */
 const valuesOf = (run: FlowRun, values: Values | string): Row =>
   typeof values === 'string'
@@ -202,6 +209,7 @@ const modelOf = (run: FlowRun, model: string | undefined): string => {
 export const Flow = {
   block: defineStepKind({
     name: 'block',
+    expressions: (a) => templateExprs(a.message),
     validate: (a) =>
       typeof a.message === 'string' && a.message
         ? null
@@ -214,12 +222,14 @@ export const Flow = {
   warn: defineStepKind({
     name: 'warn',
     phases: ['check'],
+    expressions: (a) => templateExprs(a.message),
     run: async (run, a) => run.warn(a.code ?? 'confirm', run.text(a.message)),
     describe: (a) => `warn: ${a.message}`,
   }),
 
   require: defineStepKind({
     name: 'require',
+    expressions: (a) => templateExprs(a.message),
     validate: (a) =>
       Array.isArray(a.fields) && a.fields.length
         ? null
@@ -240,6 +250,7 @@ export const Flow = {
   unique: defineStepKind({
     name: 'unique',
     target: 'row',
+    expressions: (a) => templateExprs(a.message),
     fields: (a) => (a.model ? [] : a.fields),
     validate: (a) =>
       Array.isArray(a.fields) && a.fields.length ? null : 'unique needs fields',
@@ -281,7 +292,10 @@ export const Flow = {
     target: 'row',
     expressions: (a) => [
       ...(a.value ? [a.value] : []),
-      ...a.probes.flatMap((p) => exprs(p.where)),
+      ...a.probes.flatMap((p) => [
+        ...exprs(p.where),
+        ...templateExprs(p.message),
+      ]),
     ],
     validate: (a) =>
       Array.isArray(a.probes) && a.probes.length
@@ -303,13 +317,13 @@ export const Flow = {
 
   lookup: defineStepKind({
     name: 'lookup',
-    expressions: (a) => exprs(a.where),
+    expressions: (a) => [...exprs(a.where), ...templateExprs(a.required)],
     validate: (a) =>
       a.model && a.as && a.where ? null : 'lookup needs model, where and as',
     run: async (run, a) => {
-      const where = run.values(a.where);
       // A condition on a value that is not there (the branch has no GSTIN) finds nothing.
-      const found = hasMissing(where)
+      const { where, missing } = run.whereValues(a.where);
+      const found = missing
         ? null
         : await run.db.findOne(
             run.t,
@@ -335,10 +349,10 @@ export const Flow = {
     validate: (a) =>
       a.model && a.as && a.where ? null : 'find needs model, where and as',
     run: async (run, a) => {
-      const where = run.values(a.where);
+      const { where, missing } = run.whereValues(a.where);
       run.vars.set(
         a.as,
-        hasMissing(where)
+        missing
           ? []
           : await run.db.findAll(
               run.t,
@@ -411,7 +425,13 @@ export const Flow = {
     name: 'assign',
     expressions: (a) => exprs(a.values),
     validate: (a) => {
-      const bad = Object.keys(a.values ?? {}).find(
+      const paths = Object.keys(a.values ?? {});
+      const unsafe = paths.find((path) =>
+        path.split('.').some((key) => UNSAFE_SEGMENTS.has(key)),
+      );
+      if (unsafe)
+        return `assign: "${unsafe}" names a JavaScript internal, not data`;
+      const bad = paths.find(
         (path) =>
           !ASSIGN_ROOTS.has(path.split('.')[0]!) || path.split('.').length < 2,
       );
@@ -423,12 +443,14 @@ export const Flow = {
       for (const [path, arg] of Object.entries(a.values)) {
         const [root, ...keys] = path.split('.');
         let target = (root === 'data' ? run.c.dto : run.c.state) as Row;
-        for (const key of keys.slice(0, -1))
+        if (keys.some((key) => UNSAFE_SEGMENTS.has(key)))
+          throw new Error(`assign: "${path}" names a JavaScript internal`);
+        for (const key of keys.slice(0, -1)) {
+          const next = Object.hasOwn(target, key) ? target[key] : undefined;
           target = (
-            target[key] && typeof target[key] === 'object'
-              ? target[key]
-              : (target[key] = {})
+            next && typeof next === 'object' ? next : (target[key] = {})
           ) as Row;
+        }
         target[keys[keys.length - 1]!] = run.value(arg);
       }
     },
@@ -454,12 +476,23 @@ export const Flow = {
           !seen.has(String(v)) &&
           (seen.add(String(v)), true),
       );
-      const rows = wanted.length
-        ? await run.db.findAll(run.t, run.access(a.asSystem), a.model, {
-            ...run.values(a.where),
-            [a.field]: { [Op.in]: wanted },
-          })
-        : [];
+      const { where, missing } = run.whereValues(a.where);
+      const found_ =
+        wanted.length && !missing
+          ? await run.db.findAll(run.t, run.access(a.asSystem), a.model, {
+              ...where,
+              [a.field]: { [Op.in]: wanted },
+            })
+          : [];
+      // In the order of the list, like `missing`.
+      const position = new Map(
+        wanted.map((value, index) => [String(value), index]),
+      );
+      const rows = [...found_].sort(
+        (x, y) =>
+          (position.get(String(x[a.field])) ?? 0) -
+          (position.get(String(y[a.field])) ?? 0),
+      );
       const found = new Set(rows.map((row) => String(row[a.field])));
       run.vars.set(a.as, rows);
       if (a.missing)
@@ -540,12 +573,15 @@ export const Flow = {
         ? null
         : 'update needs a where (it never changes every row)',
     run: async (run, a) => {
+      // A condition on a value that is not there changes nothing (never `IS NULL` rows).
+      const { where, missing } = run.whereValues(a.where);
+      if (missing) return;
       await run.db.update(
         run.t,
         run.access(a.asSystem),
         a.model,
         valuesOf(run, a.values),
-        run.values(a.where),
+        where,
       );
     },
     describe: (a) =>
@@ -561,12 +597,10 @@ export const Flow = {
         ? null
         : 'destroy needs a where (it never removes every row)',
     run: async (run, a) => {
-      await run.db.destroy(
-        run.t,
-        run.access(a.asSystem),
-        a.model,
-        run.values(a.where),
-      );
+      // A condition on a value that is not there removes nothing (never `IS NULL` rows).
+      const { where, missing } = run.whereValues(a.where);
+      if (missing) return;
+      await run.db.destroy(run.t, run.access(a.asSystem), a.model, where);
     },
     describe: (a) =>
       `${a.asSystem ? '[as system] ' : ''}destroy ${a.model} where ${Object.keys(a.where).join(', ')}`,
@@ -581,10 +615,19 @@ export const Flow = {
         ? null
         : 'syncChildren needs parent and key',
     run: async (run, a) => {
-      const parent = run.values(a.parent);
-      const wanted = ((run.value(a.values) as unknown[] | null) ?? []).map(
-        (v) => (v && typeof v === 'object' ? rowValue(v, 'id') : v),
-      );
+      const { where: parent, missing } = run.whereValues(a.parent);
+      if (missing) return;
+      // Each value once; empty values are not children.
+      const seen = new Set<string>();
+      const wanted = ((run.value(a.values) as unknown[] | null) ?? [])
+        .map((v) => (v && typeof v === 'object' ? rowValue(v, 'id') : v))
+        .filter(
+          (v) =>
+            v !== null &&
+            v !== undefined &&
+            !seen.has(String(v)) &&
+            (seen.add(String(v)), true),
+        );
       const access = run.access(a.asSystem);
       const existing = (
         await run.db.findAll(run.t, access, a.model, parent, {
@@ -614,6 +657,10 @@ export const Flow = {
 
   if: defineStepKind({
     name: 'if',
+    validate: (a) =>
+      Array.isArray(a.then) && (a.else === undefined || Array.isArray(a.else))
+        ? null
+        : 'if needs then (a list of steps)',
     expressions: (a) => [a.test],
     children: (a) => [a.then, ...(a.else ? [a.else] : [])],
     run: async (run, a) =>
@@ -643,6 +690,7 @@ export const Flow = {
   try: defineStepKind({
     name: 'try',
     children: (a) => [a.steps],
+    validate: (a) => (Array.isArray(a.steps) ? null : 'try needs steps'),
     run: async (run, a) => {
       const work = () => run.steps(a.steps);
       try {
@@ -668,8 +716,12 @@ export const Flow = {
 
   call: defineStepKind({
     name: 'call',
+    validate: (a) =>
+      typeof a.method === 'string' && a.method ? null : 'call needs a method',
     expressions: (a) => exprs(a.args),
     run: async (run, a) => {
+      if (!Object.hasOwn(run.methods, a.method))
+        throw new Error(`no method "${a.method}" in this flow`);
       const result = await run.methods[a.method]!(run, run.values(a.args));
       if (a.as) run.vars.set(a.as, result);
     },
@@ -693,6 +745,7 @@ export const Flow = {
 
   decorate: defineStepKind({
     name: 'decorate',
+    names: () => ['item'],
     phases: ['after'],
     target: 'list',
     expressions: (a) => exprs(a.values),

@@ -121,7 +121,8 @@ export const JsonField = {
     },
 };
 
-const MAP_SHAPE = Symbol('jsonMapShape');
+/** Marks a column shape that wraps its value as `{ entries }` (a map or a list column). */
+const MAP_SHAPE = Symbol('jsonWrappedShape');
 
 /**
  * The shape of a column that is itself a map (free keys, each entry of `entry` or null), such as
@@ -132,6 +133,14 @@ export function jsonMapShape<T>(entry: () => Type<T>): Type<object> {
   JsonField.map(entry)(JsonMapShape.prototype, 'entries');
   Object.defineProperty(JsonMapShape, MAP_SHAPE, { value: true });
   return JsonMapShape;
+}
+
+/** The shape of a column that is a list of `entry` objects (a product's extra fields). */
+export function jsonListShape<T>(entry: () => Type<T>): Type<object> {
+  class JsonListShape {}
+  JsonField.list(entry)(JsonListShape.prototype, 'entries');
+  Object.defineProperty(JsonListShape, MAP_SHAPE, { value: true });
+  return JsonListShape;
 }
 
 /** One refused value: where, and why. */
@@ -215,13 +224,13 @@ function lostKeys(input: unknown, output: unknown, path: string[], out: string[]
  */
 export function checkJson(shape: Type<object>, input: unknown, options: { path?: string; stored?: unknown } = {}): JsonCheck {
   const path = options.path ?? '';
-  if ((shape as unknown as Record<symbol, unknown>)[MAP_SHAPE] && isPlainObject(input)) {
+  if ((shape as unknown as Record<symbol, unknown>)[MAP_SHAPE] && (isPlainObject(input) || Array.isArray(input))) {
     // Checked as `{ entries: input }`, then unwrapped.
     const inner = checkShape(shape, { entries: input }, { stored: options.stored === undefined ? undefined : { entries: options.stored } });
     const unwrap = (at: string) => [path, at.replace(/^entries\.?/, '')].filter(Boolean).join('.') || path;
     return {
-      value: (inner.value as { entries?: unknown }).entries ?? {},
-      problems: inner.problems.map((problem) => ({ ...problem, path: unwrap(problem.path) })),
+      value: (inner.value as { entries?: unknown }).entries ?? null,
+      problems: inner.problems.map((problem) => ({ path: unwrap(problem.path), message: problem.message.replace(/^entries\b/, path || 'value') })),
       dropped: inner.dropped.map(unwrap),
       kept: inner.kept.map(unwrap),
     };

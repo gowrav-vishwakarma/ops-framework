@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import { describe, expect, it } from 'vitest';
 import { Issues } from './issues.js';
-import { applyJsonColumns, checkJson, JsonField, jsonMapShape } from './json-columns.js';
+import { applyJsonColumns, checkJson, JsonField, jsonListShape, jsonMapShape } from './json-columns.js';
 
 class Ref {
   @JsonField.number() id?: number;
@@ -100,6 +100,17 @@ describe('jsonMapShape', () => {
     const kept = checkJson(Series, { SI: { id: 1, old: true } }, { path: 'defaults', stored: { SI: { id: 1, old: true } } });
     expect(kept.value).toEqual({ SI: { id: 1, old: true } });
     expect(kept.kept).toEqual(['defaults.SI.old']);
+  });
+});
+
+describe('jsonListShape', () => {
+  it('checks a column that is a list of entries', () => {
+    const Rows = jsonListShape(() => Ref);
+    const ok = checkJson(Rows, [{ id: 1, name: 'a', extra: 1 }], { path: 'rows' });
+    expect(ok.value).toEqual([{ id: 1, name: 'a' }]);
+    expect(ok.dropped).toEqual(['rows.0.extra']);
+    expect(checkJson(Rows, [{ id: 'x' }], { path: 'rows' }).problems.map((problem) => problem.path)).toEqual(['rows.0.id']);
+    expect(checkJson(Rows, { id: 1 }, { path: 'rows' }).problems).toEqual([{ path: 'rows', message: 'rows must be an array' }]);
   });
 });
 

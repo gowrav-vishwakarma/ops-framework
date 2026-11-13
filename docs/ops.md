@@ -438,7 +438,8 @@ A JSON column gets a shape class whose fields carry `JsonField.*` decorators (`s
 `bool()`, `text()`, `number({ numeric? })` (`numeric`: a string holding a number too), `oneOf([...])`,
 `any()` (deliberately open), `object(() => Shape, { or?: ['number'] })` (a record, or e.g. its id),
 `list(() => Shape | 'text' | 'number')`, `map(() => Shape)` (free keys such as series types or user ids,
-each entry an object or null). Every field may be left out or null.
+each entry an object or null). Every field may be left out or null. A column that is itself a map
+(default series by voucher type) uses `jsonMapShape(() => Entry)` as its shape.
 
 A CRUD service declares `jsonColumns = { itemSettings: ItemSettings }`. A create or update that sends
 one of them checks it before guards, limits and check steps:

@@ -121,6 +121,19 @@ export const JsonField = {
     },
 };
 
+const MAP_SHAPE = Symbol('jsonMapShape');
+
+/**
+ * The shape of a column that is itself a map (free keys, each entry of `entry` or null), such as
+ * default series by voucher type: `jsonColumns = { defaultSeriesSettings: jsonMapShape(() => SeriesRef) }`.
+ */
+export function jsonMapShape<T>(entry: () => Type<T>): Type<object> {
+  class JsonMapShape {}
+  JsonField.map(entry)(JsonMapShape.prototype, 'entries');
+  Object.defineProperty(JsonMapShape, MAP_SHAPE, { value: true });
+  return JsonMapShape;
+}
+
 /** One refused value: where, and why. */
 export interface JsonProblem {
   path: string;
@@ -200,6 +213,22 @@ function lostKeys(input: unknown, output: unknown, path: string[], out: string[]
  * `stored` is the value the column holds now (unknown keys sent back unchanged from it are kept).
  */
 export function checkJson(shape: Type<object>, input: unknown, options: { path?: string; stored?: unknown } = {}): JsonCheck {
+  const path = options.path ?? '';
+  if ((shape as unknown as Record<symbol, unknown>)[MAP_SHAPE] && isPlainObject(input)) {
+    // Checked as `{ entries: input }`, then unwrapped.
+    const inner = checkShape(shape, { entries: input }, { stored: options.stored === undefined ? undefined : { entries: options.stored } });
+    const unwrap = (at: string) => [path, at.replace(/^entries\.?/, '')].filter(Boolean).join('.') || path;
+    return {
+      value: (inner.value as { entries?: unknown }).entries ?? {},
+      problems: inner.problems.map((problem) => ({ ...problem, path: unwrap(problem.path) })),
+      dropped: inner.dropped.map(unwrap),
+      kept: inner.kept.map(unwrap),
+    };
+  }
+  return checkShape(shape, input, { path, stored: options.stored });
+}
+
+function checkShape(shape: Type<object>, input: unknown, options: { path?: string; stored?: unknown }): JsonCheck {
   const path = options.path ?? '';
   if (input === null || input === undefined) return { value: input ?? null, problems: [], dropped: [], kept: [] };
   if (!isPlainObject(input)) return { value: input, problems: [{ path, message: `${path || 'value'} must be an object` }], dropped: [], kept: [] };

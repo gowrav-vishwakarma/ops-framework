@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import { describe, expect, it } from 'vitest';
 import { Issues } from './issues.js';
-import { applyJsonColumns, checkJson, JsonField } from './json-columns.js';
+import { applyJsonColumns, checkJson, JsonField, jsonMapShape } from './json-columns.js';
 
 class Ref {
   @JsonField.number() id?: number;
@@ -86,6 +86,20 @@ describe('checkJson', () => {
   it('replaces the column: keys the input leaves out are not taken from the stored value', () => {
     const result = checkJson(Section, { enable: true }, { stored: { enable: false, digits: 2 } });
     expect(result.value).toEqual({ enable: true });
+  });
+});
+
+describe('jsonMapShape', () => {
+  it('checks a column that is a map of entries', () => {
+    const Series = jsonMapShape(() => Ref);
+    const ok = checkJson(Series, { SI: { id: 1, name: 'Sales', extra: 1 }, POS: null }, { path: 'defaults' });
+    expect(ok.value).toEqual({ SI: { id: 1, name: 'Sales' }, POS: null });
+    expect(ok.dropped).toEqual(['defaults.SI.extra']);
+    const bad = checkJson(Series, { SI: { id: 'x' }, PI: 3 }, { path: 'defaults' });
+    expect(bad.problems.map((problem) => problem.path).sort()).toEqual(['defaults.PI', 'defaults.SI.id']);
+    const kept = checkJson(Series, { SI: { id: 1, old: true } }, { path: 'defaults', stored: { SI: { id: 1, old: true } } });
+    expect(kept.value).toEqual({ SI: { id: 1, old: true } });
+    expect(kept.kept).toEqual(['defaults.SI.old']);
   });
 });
 

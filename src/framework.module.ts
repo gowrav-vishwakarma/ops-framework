@@ -1,5 +1,6 @@
 import { type DynamicModule, Global, type MiddlewareConsumer, Module, type NestModule, type InjectionToken, type ModuleMetadata, type OptionalFactoryDependency, type Provider, type Type } from '@nestjs/common';
-import { APP_FILTER, APP_GUARD, DiscoveryModule } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD, ApplicationConfig, DiscoveryModule } from '@nestjs/core';
+import { CompanyInputPipe } from './tenancy/company-input.js';
 import { ErrorAnswerFilter } from './database-errors.js';
 import { JwtService } from '@nestjs/jwt';
 import { getModelToken, SequelizeModule } from '@nestjs/sequelize';
@@ -219,6 +220,10 @@ export class FrameworkModule implements NestModule {
             },
           ]
         : []),
+      // The company is the token's on every endpoint: the check on handler arguments runs as the first
+      // global pipe. Added while the app is created, so it comes before the app's own useGlobalPipes
+      // (validation would otherwise drop a body's companyId before it is seen).
+      { provide: CompanyInputPipe, inject: [ApplicationConfig], useFactory: (config: ApplicationConfig) => { const pipe = new CompanyInputPipe(); config.addGlobalPipe(pipe); return pipe; } },
       { provide: APP_GUARD, useExisting: JwtAuthGuard },
       { provide: APP_GUARD, useExisting: TenantContextGuard },
       { provide: APP_GUARD, useExisting: PermissionGuard },

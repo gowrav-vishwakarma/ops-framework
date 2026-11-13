@@ -1,3 +1,4 @@
+import { checkCompanyInput } from './company-input.js';
 import {
   ForbiddenException,
   Inject,
@@ -61,6 +62,10 @@ export class TenantContextGuard implements CanActivate {
     const sequelize = await this.registry.get(placement.dbKey);
     await this.schemas.checkParity(sequelize, placement.dbKey, placement.schema);
     setTenant({ ref, placement, sequelize });
+    // The company is the token's: a body, query or route parameter naming another is refused (see company-input.ts).
+    checkCompanyInput(request.params, ref.companyId, 'param');
+    checkCompanyInput(request.query, ref.companyId, 'query', false);
+    checkCompanyInput(request.body, ref.companyId, 'body');
     if (this.validator) {
       const extra = await this.validator.validate(request.claims ?? {}, request.user, request);
       if (extra) request.user = { ...request.user, ...extra };

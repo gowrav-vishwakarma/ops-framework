@@ -87,7 +87,11 @@ export function installCompanySqlCheck(sequelize: Sequelize, mode: CompanySqlChe
       shape ??= shapeOf(models());
       const missing = missingCompany(text, shape);
       if (missing) {
-        if (mode === 'error') return Promise.reject(new CompanySqlRefused(text, missing));
+        if (mode === 'error') {
+          // The whole statement in the log: the answer carries only its start.
+          logger.error(`Refused raw SQL (tables without a company filter: ${missing.join(', ')}):\n${text}`);
+          return Promise.reject(new CompanySqlRefused(text, missing));
+        }
         if (!warned.has(text)) {
           warned.add(text);
           logger.warn(new CompanySqlRefused(text, missing).message);

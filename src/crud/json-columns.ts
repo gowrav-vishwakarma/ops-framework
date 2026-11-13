@@ -168,7 +168,8 @@ function problemsOf(errors: ValidationError[], prefix: string, parent?: { owner:
       // The error sits on a field of `error.target`, or (map / list entry) on an entry of the parent field.
       const meta = parent?.isEntry ? metaOf(parent.owner, parent.key) : metaOf(error.target, error.property);
       const value = error.value;
-      if (meta && ((value === null && parent?.isEntry && meta.nullEntries) || matches(value, meta.or))) delete constraints.nestedValidation;
+      // Allowed by `or` / a null entry, or already said by another constraint (`must be an array`).
+      if ((meta && ((value === null && parent?.isEntry && meta.nullEntries) || matches(value, meta.or))) || Object.keys(constraints).length > 1) delete constraints.nestedValidation;
       else constraints.nestedValidation = `${error.property} must be an object`;
     }
     for (const message of Object.values(constraints)) out.push({ path, message });

@@ -53,6 +53,12 @@ export interface FrameworkOptions {
     placement: PlacementStrategy;
     /** Schema used when a shard has no routing row of its own. */
     sharedSchema?: string;
+    /**
+     * Raw SQL in a tenant context must name the company for every partitioned table it uses
+     * (`tenancy/company-sql.ts`): `warn` (default) logs a statement that does not, `error` refuses it
+     * (tests, scenario runs), `off` skips the check. Model calls are always filtered by the partition hooks.
+     */
+    companySql?: 'off' | 'warn' | 'error';
   };
   auth: {
     /** Maps verified access-token claims to the signed-in user. */

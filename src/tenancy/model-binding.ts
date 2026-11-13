@@ -104,10 +104,60 @@ function installPartitionHooks(model: AnyModel): void {
   // The partition filter is also applied here, so a query that forgot it still cannot leave its company.
   model.addHook('beforeFind', 'framework:partition-find', pin as never);
   model.addHook('beforeCount', 'framework:partition-count', pin as never);
+  // Joined rows too: a row classic (or anyone) wrote across companies never comes back through a join.
+  model.addHook('beforeFindAfterExpandIncludeAll', 'framework:partition-include', ((options: { include?: unknown[] }) => {
+    const id = current();
+    if (id !== undefined) pinIncludes(options.include, id);
+  }) as never);
   model.addHook('beforeBulkUpdate', 'framework:partition-update', pinColumn as never);
   model.addHook('beforeBulkUpdate', 'framework:partition-keep', keepOnUpdate as never);
   // Saves without validation (`validate: false`) skip beforeValidate: check again just before writing.
   model.addHook('beforeCreate', 'framework:partition-create', fill as never);
   model.addHook('beforeUpdate', 'framework:partition-save', fill as never);
   model.addHook('beforeBulkDestroy', 'framework:partition-destroy', pinColumn as never);
+  // An upsert by id (bulkCreate updateOnDuplicate, upsert) updates whatever row has that id: never
+  // another company's.
+  const pkField = () => model.getAttributes()[model.primaryKeyAttribute]?.field ?? model.primaryKeyAttribute;
+  const refuseForeignIds = async (rows: Model[], options: { transaction?: unknown }) => {
+    const id = current();
+    if (id === undefined) return;
+    const ids = rows.map((r) => r.get(model.primaryKeyAttribute)).filter((v) => v !== null && v !== undefined);
+    if (!ids.length) return;
+    const qi = model.sequelize!.getQueryInterface();
+    const sql = `SELECT ${qi.quoteIdentifier(pkField())} AS id FROM ${(qi as unknown as { queryGenerator: { quoteTable: (t: unknown) => string } }).queryGenerator.quoteTable(model.getTableName())} WHERE ${qi.quoteIdentifier(pkField())} IN (:ids) AND ${qi.quoteIdentifier(partitionColumnOf(model as never))} <> :company LIMIT 1`;
+    const [foreign] = (await model.sequelize!.query(sql, { replacements: { ids, company: id }, type: 'SELECT' as never, transaction: options.transaction as never })) as unknown as Array<{ id: unknown }>;
+    if (foreign) throw new ForbiddenException(`${model.name}: row ${String(foreign.id)} belongs to another company and cannot be written while working for company ${id}`);
+  };
+  model.addHook('beforeBulkCreate', 'framework:partition-upsert-ids', (async (rows: Model[], options: { updateOnDuplicate?: unknown; transaction?: unknown }) => {
+    if (options.updateOnDuplicate) await refuseForeignIds(rows, options);
+  }) as never);
+  model.addHook('beforeUpsert', 'framework:partition-upsert', (async (values: Record<string, unknown>, options: { transaction?: unknown }) => {
+    const id = current();
+    if (id === undefined) return;
+    const value = values[field];
+    if (value != null && Number(value) !== id) refuse(value, id);
+    if (value == null) values[field] = id;
+    await refuseForeignIds([{ get: (k: string) => values[k] } as unknown as Model], options);
+  }) as never);
+}
+
+type IncludeLike = { model?: AnyModel; where?: WhereOptions; required?: boolean; include?: unknown[]; through?: unknown };
+
+/**
+ * The company filter on every joined partitioned model, at any depth. A join keeps its kind: one
+ * that was optional (LEFT JOIN) stays optional, since Sequelize would otherwise make a filtered join
+ * required.
+ */
+export function pinIncludes(include: unknown[] | undefined, id: number): void {
+  for (const item of include ?? []) {
+    if (!item || typeof item !== 'object') continue;
+    const inc = item as IncludeLike;
+    const target = inc.model;
+    if (target && PARTITION.field in target.getAttributes() && !PARTITION.exempt.includes(target.name)) {
+      const pin = { [PARTITION.field]: id };
+      if (inc.required === undefined) inc.required = !!inc.where;
+      inc.where = inc.where ? { [Op.and]: [inc.where, pin] } : pin;
+    }
+    pinIncludes(inc.include, id);
+  }
 }

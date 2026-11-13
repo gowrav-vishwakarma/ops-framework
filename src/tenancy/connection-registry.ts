@@ -1,4 +1,5 @@
 import { Inject, Injectable, Logger, Optional, ServiceUnavailableException, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
+import { installCompanySqlCheck } from './company-sql.js';
 import { InjectConnection } from '@nestjs/sequelize';
 import { QueryTypes } from 'sequelize';
 import { Sequelize } from 'sequelize-typescript';
@@ -107,6 +108,7 @@ export class ConnectionRegistry implements OnModuleDestroy, OnModuleInit {
   /** Query guards on a pool, and the DDL guard when another system owns the schema. */
   private guard(sequelize: Sequelize, dbKey: string, onQuery?: () => void): void {
     installQueryGuards(sequelize, dbKey, onQuery);
+    installCompanySqlCheck(sequelize, this.options.tenancy.companySql ?? 'warn', () => Object.values(this.primary.models) as never);
     if (this.features?.schema === 'external') installDdlGuard(sequelize, dbKey);
     if (this.options.logging?.queryCapture) installQueryCapture(sequelize, dbKey, this.options.logging.queryCapture);
   }

@@ -1,4 +1,5 @@
 import { installWriteGuardHooks } from '../crud/write-guard.js';
+import { installBulkCreateChunking } from '../db/bulk-chunks.js';
 import { ForbiddenException, InternalServerErrorException, Logger } from '@nestjs/common';
 import { Op, type ModelStatic, type WhereOptions } from 'sequelize';
 import type { Model, Sequelize } from 'sequelize-typescript';
@@ -44,6 +45,7 @@ const BOUND = new WeakSet<object>();
  * classes without re-initialising them (see `ConnectionRegistry`).
  */
 export function bindTenantModels(primary: Sequelize, control: () => Sequelize): void {
+  installBulkCreateChunking();
   for (const model of Object.values(primary.models) as AnyModel[]) {
     if (BOUND.has(model)) continue;
     BOUND.add(model);

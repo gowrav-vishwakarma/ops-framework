@@ -11,6 +11,7 @@ export * from './naming.js';
 export * from './errors.js';
 export * from './dto.js';
 export * from './money.js';
+export { BULK_CHUNK, chunkedBulkCreate, installBulkCreateChunking } from './db/bulk-chunks.js';
 
 // Migrations
 export * from './migrations/migration.js';

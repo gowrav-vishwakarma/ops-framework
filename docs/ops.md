@@ -456,6 +456,17 @@ Columns a write does not send are left alone. A save that does not go through th
 `500-execute.ts`, a service writing the column) calls `applyJsonColumns(c, { column: Shape })` from a
 step, or `checkJson(Shape, value, { path, stored })` for the result (`value`, `problems`, `dropped`, `kept`).
 
+## Bulk inserts run in batches
+
+`Model.bulkCreate` is batched for every model (`installBulkCreateChunking`, installed when the framework
+binds the tenant models): more than `BULK_CHUNK` (1,000) rows run as several statements of at most that
+many, in order, with the same options, and the answer is every row in the order given. One statement per
+call grows without bound (a voucher of thousands of lines, thousands of generated labels): slow, heavy on
+memory, and Postgres refuses more than 65,535 bind parameters in a statement. Pass the write's
+transaction (every ops write does) so the batches commit or roll back together. Raw SQL with a long id
+list passes the ids as one array parameter (`= ANY($1::int[])`, `UNNEST`) or as one JSON parameter
+(`jsonb_to_recordset`), never one parameter per id.
+
 ## Row guards (project rules on every write)
 
 A period lock, a closed financial year or a frozen document is a project rule; the framework runs it. A service lists them, the framework runs them before the check steps of every create, update, delete and action, in `_actions` hints, and on writes to that model from flow steps:

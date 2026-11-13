@@ -46,6 +46,18 @@ describe('joined partitioned models are filtered to the company', () => {
     expect(inner.required).toBe(false);
     expect(include[1]!.where).toBeUndefined();
   });
+
+  it('pins a joined company table (the partition mirror) to the company by id', async () => {
+    const { PARTITION } = await import('./partition.js');
+    const { isMirror } = await import('./model-binding.js');
+    class Company extends Model {}
+    Company.init({ name: DataTypes.STRING }, { sequelize, modelName: 'Company', tableName: PARTITION.mirror });
+    expect(isMirror(Company as never)).toBe(true);
+    expect(isMirror(Account as never)).toBe(false);
+    const include: Array<Record<string, unknown>> = [{ model: Company, as: 'company' }];
+    pinIncludes(include, 7);
+    expect(include[0]).toMatchObject({ where: { id: 7 }, required: false });
+  });
 });
 
 describe('control-plane tables are not checked', async () => {

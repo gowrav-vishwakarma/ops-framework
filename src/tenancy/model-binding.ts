@@ -62,6 +62,7 @@ export function bindTenantModels(primary: Sequelize, control: () => Sequelize): 
       set: refuse(model.name, '_schema'),
     });
     if (PARTITION.field in model.getAttributes() && !PARTITION.exempt.includes(model.name)) installPartitionHooks(model);
+    else if (isMirror(model)) installMirrorHooks(model);
     installWriteGuardHooks(model as never);
   }
   logger.log(`Bound ${Object.keys(primary.models).length} models`);
@@ -141,10 +142,46 @@ function installPartitionHooks(model: AnyModel): void {
   }) as never);
 }
 
+/** The per-schema company table itself (`PARTITION.mirror`): its row of a company is the one whose id is the company. */
+export function isMirror(model: AnyModel): boolean {
+  return (model as unknown as { tableName?: string }).tableName === PARTITION.mirror && !(PARTITION.field in model.getAttributes());
+}
+
+/**
+ * The company table in a shared schema holds every company of the schema: a company reads and
+ * changes only its own row (finds, counts and joins are pinned to its id; bulk updates and deletes
+ * too; saving another company's row is refused). Creating a row is left alone (provisioning).
+ */
+function installMirrorHooks(model: AnyModel): void {
+  const pk = model.primaryKeyAttribute;
+  const current = (): number | undefined => currentTenant()?.ref.companyId || undefined;
+  const pinOn = (key: string) => (options: { where?: WhereOptions }) => {
+    const id = current();
+    if (id === undefined) return;
+    options.where = options.where ? { [Op.and]: [options.where, { [key]: id }] } : { [key]: id };
+  };
+  const pkColumn = model.getAttributes()[pk]?.field ?? pk;
+  model.addHook('beforeFind', 'framework:mirror-find', pinOn(pk) as never);
+  model.addHook('beforeCount', 'framework:mirror-count', pinOn(pk) as never);
+  model.addHook('beforeFindAfterExpandIncludeAll', 'framework:mirror-include', ((options: { include?: unknown[] }) => {
+    const id = current();
+    if (id !== undefined) pinIncludes(options.include, id);
+  }) as never);
+  model.addHook('beforeBulkUpdate', 'framework:mirror-update', pinOn(pkColumn) as never);
+  model.addHook('beforeBulkDestroy', 'framework:mirror-destroy', pinOn(pkColumn) as never);
+  const own = (instance: Model) => {
+    const id = current();
+    const value = instance.get(pk);
+    if (id !== undefined && value != null && Number(value) !== id) throw new ForbiddenException(`${model.name}: company ${String(value)} cannot be changed while working for company ${id}`);
+  };
+  model.addHook('beforeUpdate', 'framework:mirror-save', own as never);
+  model.addHook('beforeDestroy', 'framework:mirror-remove', own as never);
+}
+
 type IncludeLike = { model?: AnyModel; where?: WhereOptions; required?: boolean; include?: unknown[]; through?: unknown };
 
 /**
- * The company filter on every joined partitioned model, at any depth. A join keeps its kind: one
+ * The company filter on every joined partitioned model (and on the company table, by id), at any depth. A join keeps its kind: one
  * that was optional (LEFT JOIN) stays optional, since Sequelize would otherwise make a filtered join
  * required.
  */
@@ -153,8 +190,9 @@ export function pinIncludes(include: unknown[] | undefined, id: number): void {
     if (!item || typeof item !== 'object') continue;
     const inc = item as IncludeLike;
     const target = inc.model;
-    if (target && PARTITION.field in target.getAttributes() && !PARTITION.exempt.includes(target.name)) {
-      const pin = { [PARTITION.field]: id };
+    const mirror = target ? isMirror(target) : false;
+    if (target && (mirror || (PARTITION.field in target.getAttributes() && !PARTITION.exempt.includes(target.name)))) {
+      const pin = { [mirror ? target.primaryKeyAttribute : PARTITION.field]: id };
       if (inc.required === undefined) inc.required = !!inc.where;
       inc.where = inc.where ? { [Op.and]: [inc.where, pin] } : pin;
     }

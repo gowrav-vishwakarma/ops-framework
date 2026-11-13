@@ -7,6 +7,7 @@ import { BUILT_IN_SCOPES, DEFAULT_SCOPE_IDS, type ScopeDef, type ScopeRef } from
 import type { Actor, AuthUser, ReqCtx } from '../auth/auth-user.js';
 import type { FrameworkOptions } from '../options.js';
 import { requireTenant } from '../tenancy/context.js';
+import { isMirror } from '../tenancy/model-binding.js';
 import { PARTITION } from '../tenancy/partition.js';
 import { tenantTransaction } from '../tenancy/transaction.js';
 import type { Sequelize } from 'sequelize-typescript';
@@ -42,14 +43,16 @@ export abstract class TenantCrudService<
     return tenantTransaction(work);
   }
 
+  /** The company's rows; on the company table itself (the partition mirror), its own row. */
   protected pin(ctx: ReqCtx<AuthUser>): WhereOptions {
+    if (isMirror(this.model as never)) return { [this.model.primaryKeyAttribute]: ctx.user.companyId } as WhereOptions;
     return { [PARTITION.field]: ctx.user.companyId } as WhereOptions;
   }
 
   /** The partition, and who created and changed the row when the model has those columns. */
   protected stamps(ctx: ReqCtx<AuthUser>): Attrs {
     return {
-      [PARTITION.field]: ctx.user.companyId,
+      ...(this.hasAttribute(PARTITION.field) ? { [PARTITION.field]: ctx.user.companyId } : {}),
       ...(this.hasAttribute('createdById') ? { createdById: ctx.user.id } : {}),
       ...(this.hasAttribute('updatedById') ? { updatedById: ctx.user.id } : {}),
     };

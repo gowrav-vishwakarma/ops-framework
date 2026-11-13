@@ -7,8 +7,8 @@ import { PARTITION, partitionColumnOf } from './partition.js';
  * `tenancy.companySql`: raw SQL in a tenant context must name the company for every partitioned
  * table it reads or writes. Model calls are filtered by the partition hooks; raw SQL (`c.sql`,
  * `c.count`, `sequelize.query`) is only as safe as its author. A statement that refers to more
- * partitioned tables than it mentions the partition column is reported (`warn`) or refused
- * (`error`, for tests and scenario runs). `off` skips it.
+ * partitioned tables than it mentions the partition column is refused (`error`: tests and scenario
+ * runs) or reported (`warn`). `off` (the default) skips it: production pays nothing per query.
  *
  * A heuristic on the text, deliberately strict: `FROM "Accounts" a JOIN "AccountGroups" g ON g.id =
  * a."accountGroupId" WHERE a."companyId" = :company` names the company once for two tables and is

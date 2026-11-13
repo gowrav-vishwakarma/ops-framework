@@ -55,8 +55,9 @@ export interface FrameworkOptions {
     sharedSchema?: string;
     /**
      * Raw SQL in a tenant context must name the company for every partitioned table it uses
-     * (`tenancy/company-sql.ts`): `warn` (default) logs a statement that does not, `error` refuses it
-     * (tests, scenario runs), `off` skips the check. Model calls are always filtered by the partition hooks.
+     * (`tenancy/company-sql.ts`): `error` refuses a statement that does not (set it in tests and
+     * scenario runs), `warn` logs it, `off` (default: no cost per query in production) skips the check.
+     * Model calls are always filtered by the partition hooks.
      */
     companySql?: 'off' | 'warn' | 'error';
   };

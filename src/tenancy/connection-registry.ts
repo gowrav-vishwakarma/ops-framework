@@ -108,7 +108,7 @@ export class ConnectionRegistry implements OnModuleDestroy, OnModuleInit {
   /** Query guards on a pool, and the DDL guard when another system owns the schema. */
   private guard(sequelize: Sequelize, dbKey: string, onQuery?: () => void): void {
     installQueryGuards(sequelize, dbKey, onQuery);
-    installCompanySqlCheck(sequelize, this.options.tenancy.companySql ?? 'warn', () => Object.values(this.primary.models) as never);
+    installCompanySqlCheck(sequelize, this.options.tenancy.companySql ?? 'off', () => Object.values(this.primary.models) as never);
     if (this.features?.schema === 'external') installDdlGuard(sequelize, dbKey);
     if (this.options.logging?.queryCapture) installQueryCapture(sequelize, dbKey, this.options.logging.queryCapture);
   }

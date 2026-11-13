@@ -432,6 +432,28 @@ only proves the row exists, maybe in another company. All of a write's keys are 
 left to the database. Values steps set later are the server's own and are not checked
 (`src/crud/ref-checks.ts`).
 
+## JSON columns: typed shapes
+
+A JSON column gets a shape class whose fields carry `JsonField.*` decorators (`src/crud/json-columns.ts`):
+`bool()`, `text()`, `number({ numeric? })` (`numeric`: a string holding a number too), `oneOf([...])`,
+`any()` (deliberately open), `object(() => Shape, { or?: ['number'] })` (a record, or e.g. its id),
+`list(() => Shape | 'text' | 'number')`, `map(() => Shape)` (free keys such as series types or user ids,
+each entry an object or null). Every field may be left out or null.
+
+A CRUD service declares `jsonColumns = { itemSettings: ItemSettings }`. A create or update that sends
+one of them checks it before guards, limits and check steps:
+
+- a wrong type is a 422 field error on its path (`itemSettings.qtyDecimal`), every problem at once;
+- a key the shape does not declare is dropped and logged once (`JsonColumns` logger), unless the client
+  sent it back unchanged from the stored value (forms load a column and post it whole): then it stays,
+  so an incomplete shape never erases stored data;
+- the row takes the checked value: the column is replaced (a plain JSON update), keys the client left
+  out are not merged back.
+
+Columns a write does not send are left alone. A save that does not go through the CRUD service (a
+`500-execute.ts`, a service writing the column) calls `applyJsonColumns(c, { column: Shape })` from a
+step, or `checkJson(Shape, value, { path, stored })` for the result (`value`, `problems`, `dropped`, `kept`).
+
 ## Row guards (project rules on every write)
 
 A period lock, a closed financial year or a frozen document is a project rule; the framework runs it. A service lists them, the framework runs them before the check steps of every create, update, delete and action, in `_actions` hints, and on writes to that model from flow steps:

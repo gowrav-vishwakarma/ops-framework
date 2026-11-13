@@ -80,6 +80,7 @@ export * from './crud/crud-controller.js';
 export * from './crud/entity-action.js';
 export * from './crud/flow.js';
 export * from './crud/issues.js';
+export * from './crud/json-columns.js';
 export * from './crud/list-query.dto.js';
 export * from './crud/op-context.js';
 export { opsFolder } from './crud/ops-loader.js';

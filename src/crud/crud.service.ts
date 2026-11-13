@@ -32,6 +32,7 @@ import type { Attrs, CollectionContext, ListContext, OpBase, OpContext, Phase } 
 
 import { loadOps, OpsRegistry, sourceOf, type LoadedExecute, type LoadedStep } from './ops-loader.js';
 import { permissionCode } from '../acl/permission-code.js';
+import type { JsonColumns } from './json-columns.js';
 import { limitsFor, runBuiltInChecks, startStateReason, type BuiltInChecks } from './row-checks.js';
 import { guardsFor, RowGuardRegistry, type RowGuard } from './row-guard.js';
 import { runAsOperation, type OperationAccess } from './write-guard.js';
@@ -145,6 +146,12 @@ export abstract class CrudService<
   protected readonly guards: readonly RowGuard<M, U>[] = [];
   /** Delete keeps the row (`deleted_at`); needs a paranoid model (`tenantTable(..., { softDelete: true })`). */
   protected readonly softDelete: boolean = false;
+  /**
+   * JSON columns and their shapes (`json-columns.ts`): a create or update checks the value it sends
+   * for each against its shape (wrong types refused with their path, unknown keys dropped) before
+   * the check steps, and stores the checked value.
+   */
+  protected readonly jsonColumns: JsonColumns = {};
 
   private ops = new OpsRegistry();
   private frameworkOptions: FrameworkOptions | undefined;
@@ -432,7 +439,7 @@ export abstract class CrudService<
   // ---- writes ---------------------------------------------------------------------------
 
   private writeChecks(op: string, label: string): BuiltInChecks<M> {
-    return { label, limits: limitsFor(op, this.limits), guards: this.guards, refs: true };
+    return { label, limits: limitsFor(op, this.limits), guards: this.guards, refs: true, json: this.jsonColumns };
   }
 
   async create(ctx: ReqCtx<U>, dto: TCreate, outer?: Transaction, confirmed = false): Promise<unknown> {

@@ -1,6 +1,7 @@
 import { InternalServerErrorException, Logger } from '@nestjs/common';
 import type { Model, ModelStatic, Sequelize } from 'sequelize';
 import { currentTenant } from './context.js';
+import { isControlModel } from './model-binding.js';
 import { PARTITION, partitionColumnOf } from './partition.js';
 
 /**
@@ -35,7 +36,8 @@ function shapeOf(models: ModelStatic<Model>[]): Shape {
   const tables = new Set<string>();
   const columns = new Set<string>([PARTITION.column]);
   for (const model of models) {
-    if (!(PARTITION.field in model.getAttributes()) || PARTITION.exempt.includes(model.name)) continue;
+    // Control-plane tables (companies, identities, their links) are not one tenant's rows: not checked.
+    if (!(PARTITION.field in model.getAttributes()) || PARTITION.exempt.includes(model.name) || isControlModel(model as never)) continue;
     const name = model.getTableName() as string | { tableName: string };
     tables.add(typeof name === 'string' ? name : name.tableName);
     columns.add(partitionColumnOf(model as never));

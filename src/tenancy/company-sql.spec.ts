@@ -47,3 +47,27 @@ describe('joined partitioned models are filtered to the company', () => {
     expect(include[1]!.where).toBeUndefined();
   });
 });
+
+describe('control-plane tables are not checked', async () => {
+  const { installCompanySqlCheck } = await import('./company-sql.js');
+  const { runWithTenant } = await import('./context.js');
+  const { Sequelize: S, DataTypes: D, Model: M } = await import('sequelize');
+  const { NAMES } = await import('../naming.js');
+
+  it('lets a cross-company count of a control table through, still refuses a tenant one', async () => {
+    const sequelize = new S('postgres://x@localhost/x', { logging: false });
+    class Link extends M {}
+    Link.init({ companyId: D.INTEGER, userId: D.INTEGER }, { sequelize, modelName: 'Link', tableName: 'Links', schema: NAMES.controlSchema });
+    class Item extends M {}
+    Item.init({ companyId: D.INTEGER }, { sequelize, modelName: 'Item', tableName: 'Items' });
+    const seen: string[] = [];
+    (sequelize as unknown as { query: (sql: string) => Promise<unknown> }).query = async (sql: string) => void seen.push(sql);
+    installCompanySqlCheck(sequelize, 'error', () => [Link, Item] as never);
+    await runWithTenant({ ref: { companyId: 7 }, placement: { dbKey: 'main', schema: 't7', epoch: 1 }, sequelize } as never, async () => {
+      await sequelize.query(`SELECT count(*) FROM "${NAMES.controlSchema}"."Links" WHERE "userId" = 1`);
+      await expect(sequelize.query('SELECT count(*) FROM "Items" WHERE id = 1')).rejects.toThrow(/Items/);
+    });
+    expect(seen).toEqual([`SELECT count(*) FROM "${NAMES.controlSchema}"."Links" WHERE "userId" = 1`]);
+  });
+});
+

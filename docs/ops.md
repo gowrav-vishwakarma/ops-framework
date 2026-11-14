@@ -171,7 +171,7 @@ Declared in `<module>.actions.ts`. Each action is a permission: `branch.deactiva
 - **`bulk`** — `POST /actions/:name` with `{ ids }`. Every record is checked first and blockers come back per record. Then before, the main change, and after run per record, in one transaction.
 - **`collection`** — `POST /actions/:name`, no record. Use `collectionStep`, and `runCollection` or `collectionExecute`. Set `c.result` for the response.
 
-`input: SomeDto` validates the body with class-validator before the steps. Field errors go into `issues`. `inputs` is the separate list the UI uses to draw the dialog.
+`input: SomeDto` validates the body with class-validator before the steps. An input that fails (or a required `inputs` field left empty) is refused with 422 field errors before the check steps run, so steps may rely on `c.dto` having its fields and types (as a create's DTO, validated before any step). `inputs` is the separate list the UI uses to draw the dialog.
 
 The row menu shows `row` actions only.
 

@@ -738,7 +738,11 @@ export abstract class CrudService<
     return issues;
   }
 
-  /** The action's input: required fields, then the DTO class if it has one. Returns what steps get as `c.dto`. */
+  /**
+   * The action's input: required fields, then the DTO class if it has one. Returns what steps get as `c.dto`. An
+   * input that fails is refused here, before the check steps: like a create's DTO (validated before any step), the
+   * steps may rely on `c.dto` having its fields and types.
+   */
   private async actionInput(action: EntityAction<M, U>, input: Record<string, unknown>, issues: Issues): Promise<unknown> {
     for (const field of action.inputs ?? []) {
       const given = input[field.id];
@@ -746,12 +750,15 @@ export abstract class CrudService<
         issues.field(field.id, `${field.label} is required`);
       }
     }
-    if (!action.input) return input;
-    const instance = plainToInstance(action.input, input, { enableImplicitConversion: true });
-    for (const [field, messages] of Object.entries(flattenValidationErrors(await validate(instance, { forbidUnknownValues: false })))) {
-      for (const message of messages) issues.field(field, message);
+    let dto: unknown = input;
+    if (action.input) {
+      dto = plainToInstance(action.input, input, { enableImplicitConversion: true });
+      for (const [field, messages] of Object.entries(flattenValidationErrors(await validate(dto as object, { forbidUnknownValues: false })))) {
+        for (const message of messages) issues.field(field, message);
+      }
     }
-    return instance;
+    issues.throwIfFailed();
+    return dto;
   }
 
   /** built-in checks -> check steps -> report issues -> confirmation -> before steps -> main change -> after steps. */

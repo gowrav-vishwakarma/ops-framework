@@ -581,7 +581,7 @@ export abstract class CrudService<
     if ((action.kind ?? 'row') !== 'row') throw new BadRequestException(`${action.label} works on many records: POST /actions/${name}`);
     let result: unknown;
     await this.inTx(outer, async (t) => {
-      const row = await this.findOne(ctx, id, t, true, action.onDeleted === true);
+      const row = await this.findOne(ctx, id, t, action.readOnly !== true, action.onDeleted === true);
       const c = this.rowContext<unknown>(name, ctx, t, row, { ...row.get({ plain: true }) } as Attrs, input);
       c.dto = await this.actionInput(action, input, c.issues);
       this.startState(action, row, c.issues).throwIfFailed(`${action.label} is not possible`);
@@ -590,8 +590,10 @@ export abstract class CrudService<
         failMessage: `${action.label} is not possible`,
         builtIn: this.actionChecks(action),
       });
-      await this.afterWrite(c, `action:${action.name}`);
-      await this.record(t, ctx, id, `action:${action.name}`, this.snapshot(input));
+      if (action.readOnly !== true) {
+        await this.afterWrite(c, `action:${action.name}`);
+        await this.record(t, ctx, id, `action:${action.name}`, this.snapshot(input));
+      }
       result = c.result;
     });
     // `restore` brings the row back, so it is read normally; any other action on a deleted row reads it as deleted.
@@ -665,7 +667,7 @@ export abstract class CrudService<
       const c: CollectionContext<Attrs, unknown, U> = { ...makeOpBase(this.opEnv(), action.name, ctx, t), dto: input };
       c.dto = await this.actionInput(action, input, c.issues);
       await this.runSteps(c, input.confirm === true, async () => action.runCollection?.(c), { failMessage: `${action.label} is not possible` });
-      await this.record(t, ctx, 0, `action:${action.name}`, this.snapshot(input));
+      if (action.readOnly !== true) await this.record(t, ctx, 0, `action:${action.name}`, this.snapshot(input));
       result = c.result;
     });
     return result !== undefined ? result : { done: true };

@@ -89,6 +89,8 @@ export const branchActions: EntityAction<Branch>[] = [
 - `from` is the row state it starts from. It also enables the button in the UI.
 - `effect` is the one line the flow doc prints for the main change.
 - `run` is optional. `statusActions` gives deactivate and activate a `run` that sets `status`.
+- `readOnly: true` marks an action that only reads (a report, print or label data): a row action reads its row without
+  a lock, and neither kind writes an audit row or runs after-write work. It answers `c.result`.
 
 ## Where the save happens: `500-execute.ts`
 

@@ -68,6 +68,11 @@ export interface EntityAction<M extends Model = Model, U extends Actor = AuthUse
   runCollection?(c: CollectionContext<Attrs, unknown, U>): Promise<void>;
   /** What `run` does, in a few words, for the flow document: "status -> inactive". */
   effect?: string;
+  /**
+   * The action only reads (a report, print or label data): the row is read without a lock, and no after-write work
+   * or audit row follows (nothing changed). Its answer is `c.result`.
+   */
+  readOnly?: boolean;
 }
 
 /** What the API tells the UI about an action. */

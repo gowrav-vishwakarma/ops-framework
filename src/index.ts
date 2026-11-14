@@ -21,6 +21,7 @@ export * from './migrations/migration-runner.js';
 // Cluster
 export * from './cluster/cluster-bus.js';
 export { RedisBus } from './cluster/redis-bus.js';
+export { quietRedisErrors } from './cluster/redis.js';
 
 // Services: contracts between deployments
 export * from './services/contract.js';

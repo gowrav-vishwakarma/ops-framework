@@ -1,3 +1,4 @@
+import type { CacheRule } from './cache/cache-rules.js';
 import type { Model } from 'sequelize-typescript';
 import type { AdminUser, AuthUser } from './auth/auth-user.js';
 import type { PermissionEntry } from './acl/catalog-types.js';
@@ -127,6 +128,11 @@ export interface FrameworkOptions {
   shardPool?: { cloud?: number; onprem?: number };
   /** A non-primary shard pool idle this long is closed (default 10 minutes); reopened on next use. */
   shardIdleMs?: number;
+  /**
+   * Caches of database rows and the models whose writes make them stale (`cache/cache-rules.ts`): cleared after the
+   * writing transaction commits, once per transaction, for the companies it touched.
+   */
+  cacheRules?: readonly CacheRule[];
   /**
    * Redis shared by every process of the deployment: the cluster bus (cache invalidation) and
    * service events. Unset: one process only (local bus, in-process events).

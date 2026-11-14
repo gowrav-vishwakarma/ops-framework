@@ -5,6 +5,7 @@ import { Op, type ModelStatic, type WhereOptions } from 'sequelize';
 import type { Model, Sequelize } from 'sequelize-typescript';
 import { NAMES } from '../naming.js';
 import { currentTenant, requireTenant } from './context.js';
+import { installCacheRuleHooks } from '../cache/cache-rules.js';
 import { PARTITION, partitionColumnOf } from './partition.js';
 
 type AnyModel = ModelStatic<Model> & { options: { schema?: string }; tableName: string };
@@ -49,6 +50,8 @@ export function bindTenantModels(primary: Sequelize, control: () => Sequelize): 
   for (const model of Object.values(primary.models) as AnyModel[]) {
     if (BOUND.has(model)) continue;
     BOUND.add(model);
+    // Cache rules watch tenant and control models alike (installed here, never in the model files a project copies).
+    installCacheRuleHooks(model as never);
     if (isControlModel(model)) {
       Object.defineProperty(model, 'sequelize', { configurable: true, get: () => control(), set: refuse(model.name, 'sequelize') });
       continue;

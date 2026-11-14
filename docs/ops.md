@@ -512,6 +512,30 @@ While an operation's steps run (`create`, `update`, `delete`, actions), the fram
 
 `asSystem(() => work)` lifts the scope (never the guards) for integrity writes the system makes whatever the caller's reach; say why where you use it. Writes outside operations (sign-in, jobs, migrations) are not checked. A refusal is a 422 blocker (`out_of_scope` or the guard's code).
 
+## Caches cleared after writes (`cacheRules`)
+
+A cache of database rows (a company's context in Redis, permissions held in memory) goes stale when those rows change.
+Instead of clearing it by hand in every step that writes them, the project lists its caches once, with the models whose
+writes make them stale:
+
+```ts
+cacheRules: [
+  { id: 'company-context', models: ['CompanySettings', 'Series', 'Branch'], clear: (companyIds, get) => get(AuthCache).invalidateCompanies(companyIds) },
+  { id: 'company-row', models: ['AnkpalCompany'], companyOf: (row) => row.id as number, clear: ... },
+]
+```
+
+The framework hooks those models when it binds them (tenant and control models; never in the model files, so copied
+models stay as they are): every create, update, upsert, bulk write and delete, from any step, service or flow, records
+the companies it touched (the row's partition field, a rule's `companyOf`, a bulk statement's condition, else the
+request's company). After the outermost transaction commits, each rule's `clear` runs once with those companies (a
+write without a transaction: on the next tick). A rolled-back write clears nothing; a failing `clear` is logged.
+
+Only caches the reader rebuilds from the database on a miss belong here. A signed-in session is not one: dropping it
+signs the user out, so revoking it stays an explicit step of the action that means it (block, remove, role change).
+Raw SQL writes are not seen; name the cache in that step. In-process caches of other processes need `redis` set (the
+cluster bus carries `AclService.forgetCompany` and the like).
+
 ## Soft delete and restore
 
 `tenantTable('invoices', indexes, { softDelete: true })` makes the model paranoid, and the service sets `protected readonly softDelete = true`. Delete then sets `deleted_at`, normal reads skip the row, and the framework adds a `restore` action (permission `<resource>.restore`, which must be in the catalog). `GET /<resource>?deleted=1` lists deleted records and needs that permission. A dependent that is also soft deleted sets `paranoid: true` in `dependents` so its deleted rows do not block.

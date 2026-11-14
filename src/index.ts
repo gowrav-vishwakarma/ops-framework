@@ -110,6 +110,7 @@ export * from './tenancy/tenant-db.js';
 export * from './tenancy/tenant-runner.js';
 export * from './crud/row-guard.js';
 export { asSystem, operationAccess, runAsOperation, WriteGuard, outOfScope, type OperationAccess } from './crud/write-guard.js';
+export { CacheRules, type CacheRule } from './cache/cache-rules.js';
 export { sequelizeOf } from './tenancy/guards.js';
 
 // Flows: step files written as data, and the expression language they use

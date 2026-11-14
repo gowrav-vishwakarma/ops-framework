@@ -5,6 +5,7 @@ export const IS_PUBLIC = 'fw:public';
 export const IS_LOGIN_TOKEN = 'fw:login-token';
 export const REQUIRED_PERMISSION = 'fw:permission';
 export const IS_ADMIN = 'fw:admin';
+export const AUDIENCES = 'fw:audiences';
 
 export interface RequiredPermission {
   resource: string;
@@ -26,6 +27,13 @@ export const LoginToken = () => SetMetadata(IS_LOGIN_TOKEN, true);
  */
 export const AdminRoutes = () => SetMetadata(IS_ADMIN, true);
 
+/**
+ * Who the route (or controller) serves besides, or instead of, the company's users: names from
+ * `auth.audiences` (a portal), `'company'` (the company's own users) and `'apiKey'` (an integration's key,
+ * `features.apiKeys`). Without it a route serves the company's users only, and refuses every other token.
+ */
+export const Audience = (...names: string[]) => SetMetadata(AUDIENCES, names);
+
 /** The caller needs `resource.action`. The guard puts the granted scope and limits on the request. */
 export const RequirePermission = (resource: string, action: string) =>
   SetMetadata(REQUIRED_PERMISSION, { resource, action } satisfies RequiredPermission);
@@ -41,6 +49,8 @@ export interface CtxRequest {
   aclScopeParams?: Record<string, unknown>;
   /** Verified claims of a company token, for the project's `TokenValidator`. */
   claims?: Record<string, unknown>;
+  /** Who signed in when it is not one of the company's users: an `auth.audiences` name, or `'apiKey'`. */
+  audience?: string;
 }
 
 /** `{ user, scope, limits }` for the current request: the company user, or the admin on admin routes. */

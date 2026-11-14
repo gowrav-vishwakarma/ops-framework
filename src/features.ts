@@ -75,6 +75,16 @@ export interface TokenValidator {
 }
 export const TOKEN_VALIDATOR = Symbol('TOKEN_VALIDATOR');
 
+/**
+ * An integration's API key (not a token) on `@Audience('apiKey')` routes: the key's app, its company and the user it
+ * acts as (whose permissions apply). Throw `UnauthorizedException` for an unknown or revoked key. It runs before the
+ * tenant context, so it reads control-plane tables only.
+ */
+export interface ApiKeyValidator {
+  validate(key: string, request: Request): Promise<AuthUser>;
+}
+export const API_KEY_VALIDATOR = Symbol('API_KEY_VALIDATOR');
+
 /** `'tables'`: the framework's own tables and services. A class: the project's implementation. */
 export type FeatureImpl<T> = 'tables' | Type<T>;
 
@@ -85,8 +95,10 @@ export interface FrameworkFeatures {
   audit?: FeatureImpl<AuditSink>;
   /** Routes and shards, for `tenancy.placement.strategy: 'routed'`. */
   placement?: FeatureImpl<PlacementStore>;
-  /** Extra checks of every company token. */
+  /** Extra checks of every company token (and portal token: `request.audience` says which). */
   tokenValidator?: Type<TokenValidator>;
+  /** Integration API keys on `@Audience('apiKey')` routes. */
+  apiKeys?: Type<ApiKeyValidator>;
   /** Service contracts, outbox, inbox and `/_ops/calls` (platform and tenant as separate services). */
   services?: boolean;
   /** Admin roles, permissions and audit on the control plane (`FrameworkOptions.admin`). */

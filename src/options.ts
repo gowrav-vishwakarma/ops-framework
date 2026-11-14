@@ -17,6 +17,14 @@ export type PlacementStrategy =
   | { strategy: 'routed'; cacheMs?: number };
 
 /** Everything the framework needs from the app. */
+/** A kind of signed-in caller besides the company's users (`auth.audiences`). */
+export interface AudienceDef {
+  /** Whether verified claims are this audience's token. */
+  matches: (claims: Record<string, unknown>) => boolean;
+  /** The caller as a user of its company: `companyId`, `tenantKey`, and `partyId` for a party's portal. */
+  userClaims: (claims: Record<string, unknown>) => AuthUser;
+}
+
 export interface FrameworkOptions {
   /** Every permission: resource, action, label, group, and the scopes the resource offers. */
   catalog: readonly PermissionEntry[];
@@ -74,6 +82,13 @@ export interface FrameworkOptions {
      * partition field (a company token) and `login` otherwise.
      */
     tokenKind?: (claims: Record<string, unknown>) => 'access' | 'login' | 'admin' | null;
+    /**
+     * Other kinds of signed-in callers besides the company's own users: portals (a customer's or vendor's panel,
+     * a salesman's or driver's app). Each names its tokens (`matches`, checked before the company kind) and maps
+     * them to a user (`partyId` for a party's portal). A route serves an audience only when it says so with
+     * `@Audience('<name>')`; every other route refuses its tokens. `'company'` names the company's own users.
+     */
+    audiences?: Record<string, AudienceDef>;
     /** `required`: the token's routing epoch must equal the route's (moves invalidate tokens). Default `off`. */
     epoch?: 'required' | 'off';
     /** Company token lifetime. Default `15m`. */

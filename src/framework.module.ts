@@ -32,6 +32,7 @@ import {
   PLACEMENT_STORE,
   resolveFeatures,
   TOKEN_VALIDATOR,
+  API_KEY_VALIDATOR,
   type FeatureImpl,
   type FrameworkFeatures,
   type ResolvedFeatures,
@@ -177,6 +178,7 @@ export class FrameworkModule implements NestModule {
       ...feature(AUDIT_SINK, features.audit, TableAuditSink),
       ...feature(PLACEMENT_STORE, features.placement, TablePlacementStore),
       ...(features.tokenValidator ? [features.tokenValidator, { provide: TOKEN_VALIDATOR, useExisting: features.tokenValidator }] : []),
+      ...(features.apiKeys ? [features.apiKeys, { provide: API_KEY_VALIDATOR, useExisting: features.apiKeys }] : []),
       ...(features.admin ? [AdminAclService, AdminPermissionMeta, AdminCatalogService] : []),
       ...(features.services
         ? [

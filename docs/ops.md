@@ -399,13 +399,14 @@ The same operations framework runs the platform's admin panel: `ControlCrudServi
 
 | | `TenantCrudService` | `ControlCrudService` |
 | --- | --- | --- |
-| who | `AuthUser` (company token) | `AdminUser` (admin token, `typ: 'admin'`) |
+| who | `AuthUser` (company token) | `AdminUser` (admin token: `typ: 'admin'`, or what `auth.tokenKind` calls admin) |
 | pin | the caller's company | none |
 | transaction | the tenant's schema | the control plane (`ControlPlane.tx`) |
-| permissions | `roles` / `role_permissions` in the tenant schema (`AclService`) | `admin_roles` / `admin_role_permissions` (`AdminAclService`) |
+| permissions | `features.acl`: `roles` / `role_permissions` in the tenant schema, or the project's `AclSource` (`AclService`) | `features.admin`: `admin_roles` / `admin_role_permissions`, or the project's `AdminAclSource` (`AdminAclService`) |
 | scopes | `all`, `branch`, `own`, `options.scopes` | `all`, `own` (created by the admin), `options.admin.scopes` |
-| audit | tenant `entity_events` | control `entity_events` (`ControlEvent`, with the admin's name) |
+| audit | `features.audit`: tenant `entity_events`, or the project's `AuditSink` | `features.admin`: control `entity_events` (`ControlEvent`, with the admin's name), or the project's `ControlAuditSink` |
 
+- `features.admin`: `'tables'` (or `true`) uses the framework's admin tables (roles, permissions, catalog sync, audit; TMS). `{ acl, audit, tokenValidator? }` plugs in the project's classes (`AdminAclSource.load(admin)`, `ControlAuditSink.record` / `history`, and `AdminTokenValidator.validate(claims, admin, request)` run by the sign-in guard on every admin request: a revoked session or a blocked admin is refused there): no framework admin table, no catalog sync, `AdminAclModule` not used; the project serves its own admin roles (Ankpal: classic's `ankpal.AclRoles`).
 - `crudController({ ..., plane: 'control' })` marks the controller `@AdminRoutes()`: only admin tokens are accepted, a company token is refused (and an admin token is refused on company routes), no tenant context is set, `@RequirePermission` checks the admin's grants.
 - Steps of a control entity type the admin: `step<PlatformCompany, object, Dto, AdminUser>({...})`. `CrudService`, the contexts, `EntityAction` and `ScopeDef` take the user type as their last parameter, defaulting to `AuthUser`.
 - `ControlModel` adds `createdById` / `updatedById` (admin ids) to a control table; `ControlCrudService` stamps them.

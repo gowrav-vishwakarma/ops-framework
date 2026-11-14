@@ -1,9 +1,9 @@
-import { Injectable, Optional, type OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Optional, type OnModuleInit } from '@nestjs/common';
 import { PermissionMeta } from '../acl/limits.js';
 import type { EffectivePermissions } from '../acl/acl.service.js';
-import type { AclScope, AdminUser, Limits } from '../auth/auth-user.js';
+import type { AdminUser } from '../auth/auth-user.js';
 import { ClusterBus } from '../cluster/cluster-bus.js';
-import { ControlPlane } from '../tenancy/tenant-db.js';
+import { ADMIN_ACL_SOURCE, type AdminAclSource } from '../features.js';
 
 /** The admin side's own limits and hidden permissions; codes may repeat tenant ones without clashing. */
 @Injectable()
@@ -13,7 +13,8 @@ const TTL_MS = 60_000;
 const TOPIC = 'framework.admin-acl';
 
 /**
- * An admin's permissions: the role's grants on the control plane. Cached per process for a minute,
+ * An admin's permissions, from the admin permission source (`features.admin`: the framework's tables or the
+ * project's own, `AdminAclSource`). Cached per process for a minute,
  * keyed by admin, role and the role's ACL version (in the token), so a role edit takes effect on the
  * next sign-in; `forget` drops the cache in every process at once.
  */
@@ -22,7 +23,7 @@ export class AdminAclService implements OnModuleInit {
   private readonly cache = new Map<string, { at: number; value: EffectivePermissions }>();
 
   constructor(
-    private readonly control: ControlPlane,
+    @Inject(ADMIN_ACL_SOURCE) private readonly source: AdminAclSource,
     @Optional() private readonly bus?: ClusterBus,
   ) {}
 
@@ -34,7 +35,7 @@ export class AdminAclService implements OnModuleInit {
     const key = `${admin.id}:${admin.roleId ?? 0}:${admin.aclVersion}`;
     const hit = this.cache.get(key);
     if (hit && Date.now() - hit.at < TTL_MS) return hit.value;
-    const value = await this.load(admin.roleId);
+    const value = await this.source.load(admin);
     if (this.cache.size > 2_000) this.cache.clear();
     this.cache.set(key, { at: Date.now(), value });
     return value;
@@ -44,20 +45,6 @@ export class AdminAclService implements OnModuleInit {
   forget(): void {
     this.cache.clear();
     void this.bus?.publish(TOPIC, {});
-  }
-
-  private async load(roleId: number | null): Promise<EffectivePermissions> {
-    const out: EffectivePermissions = new Map();
-    if (!roleId) return out;
-    const rows = await this.control.query<{ code: string; scope: AclScope; limits: Limits | null }>(
-      `SELECT p.code, rp.scope, rp.limits FROM admin_role_permissions rp
-         JOIN admin_roles r ON r.id = rp.role_id
-         JOIN admin_permissions p ON p.id = rp.permission_id
-        WHERE rp.role_id = :roleId AND r.status = 'active'`,
-      { replacements: { roleId } },
-    );
-    for (const row of rows) out.set(row.code, { scope: row.scope, limits: row.limits ?? {} });
-    return out;
   }
 }
 

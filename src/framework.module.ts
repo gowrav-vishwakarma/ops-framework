@@ -16,6 +16,8 @@ import { TableAclSource } from './acl/table-acl.source.js';
 import { UserPermissionOverride } from './acl/user-permission-override.model.js';
 import { AdminAclService, AdminPermissionMeta } from './admin/admin-acl.service.js';
 import { AdminCatalogService } from './admin/admin-catalog.service.js';
+import { TableAdminAclSource } from './admin/table-admin-acl.source.js';
+import { TableControlAuditSink } from './admin/table-control-audit.sink.js';
 import { AdminPermission } from './admin/admin-permission.model.js';
 import { AdminRolePermission } from './admin/admin-role-permission.model.js';
 import { AdminRole } from './admin/admin-role.model.js';
@@ -27,6 +29,10 @@ import { ClusterBus, LocalBus } from './cluster/cluster-bus.js';
 import { RedisBus } from './cluster/redis-bus.js';
 import {
   ACL_SOURCE,
+  ADMIN_ACL_SOURCE,
+  ADMIN_TOKEN_VALIDATOR,
+  CONTROL_AUDIT_SINK,
+  type AdminImpl,
   AUDIT_SINK,
   FRAMEWORK_FEATURES,
   PLACEMENT_STORE,
@@ -122,13 +128,36 @@ function feature<T>(token: symbol, impl: FeatureImpl<T> | undefined, table: Type
   return [useClass, { provide: token, useExisting: useClass }];
 }
 
+/** `features.admin` on the framework's own tables (`true` / `'tables'`), not the project's (`AdminImpl`). */
+const adminTables = (features: ResolvedFeatures) => features.admin === true || features.admin === 'tables';
+
+/** The admin side: permissions, audit and, on the framework's tables, the catalog sync. */
+export function adminProviders(features: ResolvedFeatures): Provider[] {
+  const admin = features.admin;
+  if (!admin) return [];
+  const own = adminTables(features);
+  const acl = own ? TableAdminAclSource : (admin as AdminImpl).acl;
+  const audit = own ? TableControlAuditSink : (admin as AdminImpl).audit;
+  const validator = own ? undefined : (admin as AdminImpl).tokenValidator;
+  return [
+    ...(validator ? [validator, { provide: ADMIN_TOKEN_VALIDATOR, useExisting: validator }] : []),
+    acl,
+    { provide: ADMIN_ACL_SOURCE, useExisting: acl },
+    audit,
+    { provide: CONTROL_AUDIT_SINK, useExisting: audit },
+    AdminAclService,
+    AdminPermissionMeta,
+    ...(own ? [AdminCatalogService] : []),
+  ];
+}
+
 function modelsOf(features: ResolvedFeatures) {
   return [
     ...(features.acl === 'tables' ? FEATURE_MODELS.acl : []),
     ...(features.audit === 'tables' ? FEATURE_MODELS.audit : []),
     ...(features.placement === 'tables' ? FEATURE_MODELS.placement : []),
     ...(features.services ? FEATURE_MODELS.services : []),
-    ...(features.admin ? FEATURE_MODELS.admin : []),
+    ...(adminTables(features) ? FEATURE_MODELS.admin : []),
   ];
 }
 
@@ -181,7 +210,7 @@ export class FrameworkModule implements NestModule {
       ...feature(PLACEMENT_STORE, features.placement, TablePlacementStore),
       ...(features.tokenValidator ? [features.tokenValidator, { provide: TOKEN_VALIDATOR, useExisting: features.tokenValidator }] : []),
       ...(features.apiKeys ? [features.apiKeys, { provide: API_KEY_VALIDATOR, useExisting: features.apiKeys }] : []),
-      ...(features.admin ? [AdminAclService, AdminPermissionMeta, AdminCatalogService] : []),
+      ...adminProviders(features),
       ...(features.services
         ? [
             {

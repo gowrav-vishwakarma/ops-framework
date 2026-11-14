@@ -2,7 +2,7 @@ import type { Type } from '@nestjs/common';
 import type { Request } from 'express';
 import type { Transaction } from 'sequelize';
 import type { EffectivePermissions } from './acl/acl.service.js';
-import type { AuthUser, ReqCtx } from './auth/auth-user.js';
+import type { AdminUser, AuthUser, ReqCtx } from './auth/auth-user.js';
 import type { TenantRef } from './tenancy/context.js';
 
 /**
@@ -33,6 +33,36 @@ export interface AuditEntry {
   data: Record<string, unknown> | null;
 }
 export const AUDIT_SINK = Symbol('AUDIT_SINK');
+
+/** An admin's permissions on the control plane (`<resource>.<action>` -> scope and limits). */
+export interface AdminAclSource {
+  load(admin: AdminUser): Promise<EffectivePermissions>;
+}
+export const ADMIN_ACL_SOURCE = Symbol('ADMIN_ACL_SOURCE');
+
+/** Where every admin create, edit, delete and action is written, and where a control record's history is read. */
+export interface ControlAuditSink {
+  record(t: Transaction, ctx: ReqCtx<AdminUser>, entry: AuditEntry): Promise<void>;
+  /** Newest first, at most `limit` (default 200). */
+  history(ctx: ReqCtx<AdminUser>, entityType: string, entityId: number, limit?: number): Promise<unknown[]>;
+}
+export const CONTROL_AUDIT_SINK = Symbol('CONTROL_AUDIT_SINK');
+
+/**
+ * Extra checks of every admin token (session revoked, admin blocked), on admin routes, before permissions. Reads
+ * the control plane only. Throw `UnauthorizedException` to refuse; what it returns is merged into the admin.
+ */
+export interface AdminTokenValidator {
+  validate(claims: Record<string, unknown>, admin: AdminUser, request: Request): Promise<Partial<AdminUser> | void>;
+}
+export const ADMIN_TOKEN_VALIDATOR = Symbol('ADMIN_TOKEN_VALIDATOR');
+
+/** The admin side on a project's own tables: its admins' permissions, its audit and its session checks. */
+export interface AdminImpl {
+  acl: Type<AdminAclSource>;
+  audit: Type<ControlAuditSink>;
+  tokenValidator?: Type<AdminTokenValidator>;
+}
 
 /** Where a tenant lives. */
 export interface TenantRoute {
@@ -101,8 +131,12 @@ export interface FrameworkFeatures {
   apiKeys?: Type<ApiKeyValidator>;
   /** Service contracts, outbox, inbox and `/_ops/calls` (platform and tenant as separate services). */
   services?: boolean;
-  /** Admin roles, permissions and audit on the control plane (`FrameworkOptions.admin`). */
-  admin?: boolean;
+  /**
+   * The admin side (control plane, `FrameworkOptions.admin`). `true` / `'tables'`: the framework's admin roles,
+   * permissions, catalog sync and audit tables (`AdminAclModule` serves the roles). An `AdminImpl`: the project's own
+   * permission source and audit (Ankpal: classic's admin roles), no framework admin table.
+   */
+  admin?: boolean | 'tables' | AdminImpl;
   /**
    * `owned`: the framework builds and migrates schemas (sync in dev, migration runner, provisioning,
    * company moves); needs `placement: 'tables'` when routed. `external` (default): another system

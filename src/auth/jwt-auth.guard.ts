@@ -4,7 +4,7 @@ import { JwtService } from '@nestjs/jwt';
 import type { Request } from 'express';
 import { FRAMEWORK_OPTIONS, type FrameworkOptions } from '../options.js';
 import { PARTITION } from '../tenancy/partition.js';
-import { API_KEY_VALIDATOR, type ApiKeyValidator } from '../features.js';
+import { ADMIN_TOKEN_VALIDATOR, API_KEY_VALIDATOR, type AdminTokenValidator, type ApiKeyValidator } from '../features.js';
 import { AUDIENCES, IS_ADMIN, IS_LOGIN_TOKEN, IS_PUBLIC, type CtxRequest } from './decorators.js';
 
 export type TokenKind = 'access' | 'login' | 'admin' | null;
@@ -30,6 +30,7 @@ export class JwtAuthGuard implements CanActivate {
     private readonly jwt: JwtService,
     @Inject(FRAMEWORK_OPTIONS) private readonly options: FrameworkOptions,
     @Optional() @Inject(API_KEY_VALIDATOR) private readonly apiKeys?: ApiKeyValidator,
+    @Optional() @Inject(ADMIN_TOKEN_VALIDATOR) private readonly adminTokens?: AdminTokenValidator,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -67,7 +68,9 @@ export class JwtAuthGuard implements CanActivate {
     if (adminRoute || kind === 'admin') {
       if (!adminRoute) throw new UnauthorizedException('An admin token cannot open company data');
       if (kind !== 'admin' || !this.options.admin) throw new UnauthorizedException('Admin sign-in required');
-      request.admin = this.options.admin.userClaims(claims);
+      const admin = this.options.admin.userClaims(claims);
+      const extra = await this.adminTokens?.validate(claims, admin, request);
+      request.admin = extra ? { ...admin, ...extra } : admin;
       return true;
     }
     if (kind === 'access') {

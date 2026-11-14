@@ -4,8 +4,8 @@ import type { Model } from 'sequelize-typescript';
 import type { EffectivePermissions } from '../acl/acl.service.js';
 import { allScope, type ScopeDef, type ScopeRef } from '../acl/scopes.js';
 import { AdminAclService, AdminPermissionMeta } from '../admin/admin-acl.service.js';
-import { ControlEvent } from '../admin/control-event.model.js';
 import type { Actor, AdminUser, ReqCtx } from '../auth/auth-user.js';
+import { CONTROL_AUDIT_SINK, type ControlAuditSink } from '../features.js';
 import type { FrameworkOptions } from '../options.js';
 import { runWithoutTenant } from '../tenancy/context.js';
 import { ControlPlane } from '../tenancy/tenant-db.js';
@@ -24,8 +24,8 @@ export const createdScope: ScopeDef<Model, Actor> = {
 
 /**
  * CRUD on the control plane, for admin panels: the same steps, actions, list views, limits and
- * history as a tenant entity, with the admin's permissions (`AdminAclService`), audit in the control
- * plane's `entity_events`, and no company pin. Scopes: `all`, `own` (created by the admin) and those
+ * history as a tenant entity, with the admin's permissions (`AdminAclService`), audit through the control
+ * audit sink (`features.admin`), and no company pin. Scopes: `all`, `own` (created by the admin) and those
  * in `FrameworkOptions.admin.scopes` (a partner's companies...). See `CrudService`.
  */
 export abstract class ControlCrudService<
@@ -65,26 +65,16 @@ export abstract class ControlCrudService<
     return [allScope, createdScope, ...((options.admin?.scopes ?? []) as ScopeDef<Model, Actor>[])];
   }
 
-  protected async recordEvent(t: Transaction, ctx: ReqCtx<AdminUser>, entityId: number, event: string, data: Attrs | null): Promise<void> {
-    await ControlEvent.create(
-      { entityType: this.model.name, entityId, event, actorId: ctx.user.id, actorName: ctx.user.name, actorKind: ctx.user.kind, data } as never,
-      { transaction: t },
-    );
+  private get audit(): ControlAuditSink {
+    return this.moduleRef.get(CONTROL_AUDIT_SINK, { strict: false });
   }
 
-  protected async historyRows(_ctx: ReqCtx<AdminUser>, id: number): Promise<unknown[]> {
-    const rows = await this.planeTx((t) =>
-      ControlEvent.findAll({ where: { entityType: this.model.name, entityId: id }, order: [['id', 'DESC']], limit: 200, transaction: t }),
-    );
-    return rows.map((row) => ({
-      id: row.id,
-      event: row.event,
-      data: row.data,
-      createdAt: row.get('createdAt'),
-      userId: row.actorId,
-      userName: row.actorName,
-      userKind: row.actorKind,
-    }));
+  protected async recordEvent(t: Transaction, ctx: ReqCtx<AdminUser>, entityId: number, event: string, data: Attrs | null): Promise<void> {
+    await this.audit.record(t, ctx, { entityType: this.model.name, entityId, event, data });
+  }
+
+  protected historyRows(ctx: ReqCtx<AdminUser>, id: number): Promise<unknown[]> {
+    return this.audit.history(ctx, this.model.name, id);
   }
 
   protected codeOptions(): undefined {

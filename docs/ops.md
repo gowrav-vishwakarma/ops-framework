@@ -240,6 +240,10 @@ protected readonly lookups = {
   choices); `alias.field` is a field of an association, read through its include. A name the lookup does not list is
   refused (400), never dropped. `?q=` is searched in the chosen search fields, any of them, case-insensitive, as text.
   `?ids=` reads the rows of values already chosen. `?limit=` up to `maxLimit` (default 100; 20 when not given).
+- Conditions: `?filters={"isActive":true,"branchId":[1,2]}` on the lookup's `filters` fields (a value, or a list).
+  Business rules (valid on a date, for sales or purchase, a price context) are named parameters declared in `params`
+  (`?side=sales&date=2026-11-15`, typed `text` / `number` / `boolean` / `date` / `ids`), read by the steps from
+  `c.state.params`; an undeclared query key is refused. The browser never sends a query tree.
 - Its own rules (a branch scope, a special search, prices) are steps in `ops/lookup-<name>/`, run like a list's
   (`before` adds to `c.where` / `c.include`, `after` decorates `c.rows`).
 - Answer: the rows (plain objects), no count.

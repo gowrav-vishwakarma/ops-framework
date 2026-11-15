@@ -1,4 +1,4 @@
-import { Body, Delete, Get, Inject, Param, ParseIntPipe, Patch, Post, Query, type Type } from '@nestjs/common';
+import { Body, Delete, Get, Inject, Param, ParseIntPipe, Patch, Post, Query, Req, type Type } from '@nestjs/common';
 import type { Grant } from '../acl/acl.service.js';
 import type { ReqCtx } from '../auth/auth-user.js';
 import { AdminRoutes, Ctx, RequirePermission } from '../auth/decorators.js';
@@ -13,7 +13,7 @@ export interface CrudRoutes<S> {
   update(ctx: ReqCtx, id: number, dto: object, confirm?: string): Promise<unknown>;
   remove(ctx: ReqCtx, id: number, confirm?: string): Promise<unknown>;
   actions(ctx: ReqCtx): Promise<unknown>;
-  lookup(ctx: ReqCtx, name: string, query: LookupQueryDto): Promise<unknown>;
+  lookup(ctx: ReqCtx, name: string, query: LookupQueryDto, raw?: Record<string, unknown>): Promise<unknown>;
   history(ctx: ReqCtx, id: number): Promise<unknown>;
   view(ctx: ReqCtx, id: number, name: string): Promise<unknown>;
   actAll(ctx: ReqCtx, name: string, body: Record<string, unknown>): Promise<unknown>;
@@ -60,8 +60,9 @@ export function crudController<S extends object>(
     /** Run one named action. Needs its own permission, checked here against the caller's scope. */
     /** A lookup (a picker in a form): any member of the company; the service applies the lookup's own rules. */
     @Get('lookups/:name')
-    lookup(@Ctx() ctx: ReqCtx, @Param('name') name: string, @Query() query: LookupQueryDto) {
-      return (this.service as AnyService).lookup(ctx, name, query);
+    lookup(@Ctx() ctx: ReqCtx, @Param('name') name: string, @Query() query: LookupQueryDto, @Req() req: { query?: Record<string, unknown> }) {
+      // The lookup's named parameters are the query's other keys (the DTO keeps only the common ones).
+      return (this.service as AnyService).lookup(ctx, name, query, req.query ?? {});
     }
 
     @Post(':id/actions/:name')
@@ -144,7 +145,7 @@ export function crudController<S extends object>(
   // The DTO classes differ per module, so the validation pipe is told them here.
   const proto = CrudBase.prototype;
   Reflect.defineMetadata('design:paramtypes', [Object, options.query ?? ListQueryDto], proto, 'list');
-  Reflect.defineMetadata('design:paramtypes', [Object, String, LookupQueryDto], proto, 'lookup');
+  Reflect.defineMetadata('design:paramtypes', [Object, String, LookupQueryDto, Object], proto, 'lookup');
   Reflect.defineMetadata('design:paramtypes', [Object, options.create, String], proto, 'create');
   Reflect.defineMetadata('design:paramtypes', [Object, Number, String, Object], proto, 'act');
   Reflect.defineMetadata('design:paramtypes', [Object, Number], proto, 'history');
@@ -158,7 +159,7 @@ export function crudController<S extends object>(
 }
 
 interface AnyService {
-  lookup(ctx: ReqCtx, name: string, query: LookupQueryDto): Promise<unknown>;
+  lookup(ctx: ReqCtx, name: string, query: LookupQueryDto, raw?: Record<string, unknown>): Promise<unknown>;
   allowedActions(ctx: ReqCtx): Promise<unknown>;
   grantOf(ctx: ReqCtx, code: string): Promise<Grant>;
   list(ctx: ReqCtx, query: ListQueryDto): Promise<unknown>;

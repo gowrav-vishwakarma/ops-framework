@@ -1,4 +1,4 @@
-import { buildLookupFind, type LookupDef, type LookupQueryDto } from './lookup.js';
+import { buildLookupFind, lookupParams, type LookupDef, type LookupQueryDto } from './lookup.js';
 import { BadRequestException, ForbiddenException, HttpException, Inject, Logger, NotFoundException, type OnModuleInit } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { plainToInstance } from 'class-transformer';
@@ -377,13 +377,14 @@ export abstract class CrudService<
    * list grant's scope when they have one (or the lookup's own permission), only the lookup's allowed fields, `q` in
    * its search fields, `ops/lookup-<name>/` steps around the read. Plain rows, no count.
    */
-  async lookup(ctx: ReqCtx<U>, name: string, query: LookupQueryDto): Promise<Attrs[]> {
+  async lookup(ctx: ReqCtx<U>, name: string, query: LookupQueryDto, raw: Record<string, unknown> = {}): Promise<Attrs[]> {
     const def = Object.prototype.hasOwnProperty.call(this.lookups, name) ? this.lookups[name] : undefined;
     if (!def) throw new NotFoundException(`Unknown lookup: ${name}`);
     const granted = await this.effective(ctx);
     if (def.permission && !granted.has(this.permission(def.permission))) throw new ForbiddenException(`You do not have permission: ${this.permission(def.permission)}`);
     const grant = granted.get(this.permission(def.permission ?? 'list'));
     const scoped = grant ? ({ ...ctx, scope: grant.scope, limits: grant.limits ?? {}, ...(grant.params ? { scopeParams: grant.params } : {}) } as ReqCtx<U>) : ({ ...ctx, scope: 'all' } as ReqCtx<U>);
+    const params = lookupParams(def, raw);
     const find = buildLookupFind(this.model as never, def, query);
     const page = { where: [this.scopeWhere(scoped), ...find.where], include: find.include, order: find.order, limit: find.limit, offset: find.offset, attributes: find.attributes };
     const op = `lookup-${name}`;
@@ -392,6 +393,7 @@ export abstract class CrudService<
     if (this.ops.steps(op).length === 0) return (await read(page)).map((row) => row.get({ plain: true }) as Attrs);
     return this.planeTx(async (t) => {
       const c: ListContext<M, Attrs, U> = { ...makeOpBase(this.opEnv(), op, scoped, t), query: query as never, ...page, rows: [], total: 0 };
+      (c.state as Record<string, unknown>).params = params;
       await this.runSteps(c, false, async () => {
         c.rows = (await read(c, t)) as M[];
         c.total = c.rows.length;

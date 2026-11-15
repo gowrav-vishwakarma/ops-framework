@@ -25,7 +25,16 @@ export interface LookupDef {
   order?: Order;
   /** An action of the resource whose grant the caller needs (default: members of the company). */
   permission?: string;
+  /** Fields a request may filter on (`?filters={"isActive":true,"branchId":[1,2]}`: a value, or a list of values). */
+  filters?: readonly string[];
+  /**
+   * Named parameters the lookup's steps read (`?side=sales&date=2026-11-15`), typed; steps find them in
+   * `c.state.params`. A query key the lookup does not declare is refused.
+   */
+  params?: Readonly<Record<string, LookupParamType>>;
 }
+
+export type LookupParamType = 'text' | 'number' | 'boolean' | 'date' | 'ids';
 
 export class LookupQueryDto {
   /** The text typed. */
@@ -36,8 +45,39 @@ export class LookupQueryDto {
   @IsOptional() @IsString() @MaxLength(2000) search?: string;
   /** Comma-separated ids: the rows of values already chosen (a form opened for editing). */
   @IsOptional() @IsString() @MaxLength(2000) ids?: string;
+  /** JSON object of conditions on the lookup's `filters` fields: a value, or a list of values. */
+  @IsOptional() @IsString() @MaxLength(4000) filters?: string;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(500) limit?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) offset?: number;
+}
+
+const LOOKUP_KEYS = new Set(['q', 'fields', 'search', 'ids', 'filters', 'limit', 'offset']);
+
+/** The lookup's named parameters from the request's query, typed; an undeclared key or a bad value is refused. */
+export function lookupParams(def: LookupDef, raw: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (LOOKUP_KEYS.has(key)) continue;
+    const type = def.params?.[key];
+    if (!type) throw new BadRequestException(`Unknown lookup parameter: ${key}`);
+    const text = Array.isArray(value) ? String(value[0] ?? '') : String(value ?? '');
+    if (text === '') continue;
+    if (type === 'text') out[key] = text.slice(0, 500);
+    else if (type === 'number') {
+      const n = Number(text);
+      if (!Number.isFinite(n)) throw new BadRequestException(`${key} must be a number`);
+      out[key] = n;
+    } else if (type === 'boolean') {
+      if (text !== 'true' && text !== 'false') throw new BadRequestException(`${key} must be true or false`);
+      out[key] = text === 'true';
+    } else if (type === 'date') {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) throw new BadRequestException(`${key} must be a date (YYYY-MM-DD)`);
+      out[key] = text;
+    } else {
+      out[key] = list(text).map(Number).filter((id) => Number.isInteger(id) && id > 0);
+    }
+  }
+  return out;
 }
 
 /** What one lookup request reads: columns, joins, conditions, page. */
@@ -95,6 +135,23 @@ export function buildLookupFind(model: ModelStatic<Model>, def: LookupDef, query
   if (text && searchRefs.length) {
     const like = `%${text.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
     where.push({ [Op.or]: searchRefs.map((ref) => ({ [ref.startsWith('$') ? ref : ref.slice(model.name.length + 1)]: { [Op.iLike]: like } })) } as WhereOptions);
+  }
+  if (query.filters) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(query.filters);
+    } catch {
+      throw new BadRequestException('filters must be a JSON object');
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new BadRequestException('filters must be a JSON object');
+    for (const [field, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!(def.filters ?? []).includes(field)) throw new BadRequestException(`Filter not allowed in this lookup: ${field}`);
+      const ref = place(field);
+      const key = ref.startsWith('$') ? ref : ref.slice(model.name.length + 1);
+      const values = Array.isArray(value) ? value : [value];
+      if (!values.every((v) => v === null || ['string', 'number', 'boolean'].includes(typeof v))) throw new BadRequestException(`Filter ${field} takes a value or a list of values`);
+      where.push({ [key]: Array.isArray(value) ? { [Op.in]: values } : value } as WhereOptions);
+    }
   }
   const ids = list(query.ids).map(Number).filter((id) => Number.isInteger(id) && id > 0);
   if (ids.length) where.push({ id: { [Op.in]: ids } });

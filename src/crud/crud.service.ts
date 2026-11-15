@@ -1,3 +1,4 @@
+import { buildLookupFind, type LookupDef, type LookupQueryDto } from './lookup.js';
 import { BadRequestException, ForbiddenException, HttpException, Inject, Logger, NotFoundException, type OnModuleInit } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { plainToInstance } from 'class-transformer';
@@ -120,6 +121,8 @@ export abstract class CrudService<
   protected readonly opsDir: string | null = null;
   /** Attributes (or `$alias.field$` paths) the `q` search matches. */
   protected readonly searchFields: string[] = [];
+  /** The resource's lookups (`GET /<resource>/lookups/<name>`): what each may show and search (`lookup.ts`). */
+  protected readonly lookups: Readonly<Record<string, LookupDef>> = {};
   /** Keys a client may sort on: attributes, or `alias.field` on a list include. */
   protected readonly sortable: string[] = ['id', 'createdAt'];
   /** Keys the grid filter row may match (text ILIKE). Defaults to `sortable`. */
@@ -367,6 +370,34 @@ export abstract class CrudService<
     }
     if (query.actions === '1') await this.withActions(ctx, result.rows);
     return result;
+  }
+
+  /**
+   * One lookup's rows (`GET /<resource>/lookups/<name>`, see `lookup.ts`): members of the company, narrowed by their
+   * list grant's scope when they have one (or the lookup's own permission), only the lookup's allowed fields, `q` in
+   * its search fields, `ops/lookup-<name>/` steps around the read. Plain rows, no count.
+   */
+  async lookup(ctx: ReqCtx<U>, name: string, query: LookupQueryDto): Promise<Attrs[]> {
+    const def = Object.prototype.hasOwnProperty.call(this.lookups, name) ? this.lookups[name] : undefined;
+    if (!def) throw new NotFoundException(`Unknown lookup: ${name}`);
+    const granted = await this.effective(ctx);
+    if (def.permission && !granted.has(this.permission(def.permission))) throw new ForbiddenException(`You do not have permission: ${this.permission(def.permission)}`);
+    const grant = granted.get(this.permission(def.permission ?? 'list'));
+    const scoped = grant ? ({ ...ctx, scope: grant.scope, limits: grant.limits ?? {}, ...(grant.params ? { scopeParams: grant.params } : {}) } as ReqCtx<U>) : ({ ...ctx, scope: 'all' } as ReqCtx<U>);
+    const find = buildLookupFind(this.model as never, def, query);
+    const page = { where: [this.scopeWhere(scoped), ...find.where], include: find.include, order: find.order, limit: find.limit, offset: find.offset, attributes: find.attributes };
+    const op = `lookup-${name}`;
+    const read = async (p: Pick<ListContext<M, Attrs, U>, 'where' | 'include' | 'order' | 'limit' | 'offset' | 'attributes'>, t?: Transaction) =>
+      this.model.findAll({ where: { [Op.and]: p.where } as WhereOptions, include: p.include, ...(p.attributes ? { attributes: p.attributes } : {}), order: p.order, limit: p.limit, offset: p.offset, subQuery: false, ...(t ? { transaction: t } : {}) });
+    if (this.ops.steps(op).length === 0) return (await read(page)).map((row) => row.get({ plain: true }) as Attrs);
+    return this.planeTx(async (t) => {
+      const c: ListContext<M, Attrs, U> = { ...makeOpBase(this.opEnv(), op, scoped, t), query: query as never, ...page, rows: [], total: 0 };
+      await this.runSteps(c, false, async () => {
+        c.rows = (await read(c, t)) as M[];
+        c.total = c.rows.length;
+      });
+      return c.rows.map((row) => row.get({ plain: true }) as Attrs);
+    });
   }
 
   private async fetchPage(

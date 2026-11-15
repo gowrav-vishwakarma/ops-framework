@@ -30,7 +30,7 @@ export interface LoadedExecute {
 export const WRITE_OPS = ['save', 'create', 'update', 'delete', 'list'] as const;
 
 /** `list-<view>` is a named list (`GET /?view=<view>`), `view-<name>` a read of one record (`GET /:id/views/<name>`). */
-const NAMED_OP = /^(?:list|view)-[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const NAMED_OP = /^(?:list|view|lookup)-[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 /** Folders whose main change is a query, not a write: no `execute.ts`. */
 const READ_OP = /^(?:list|view)(?:-|$)/;
@@ -97,7 +97,7 @@ export async function loadOps(root: string | null, moduleRef: ModuleRef, actionN
     // `_shared/`, `_examples/`...: helpers next to the operations, never loaded as one.
     if (entry.name.startsWith('_')) continue;
     if (!allowed.has(entry.name) && !NAMED_OP.test(entry.name)) {
-      fail(root, entry.name, `no such operation; expected one of ${[...allowed].join(', ')}, list-<view> or view-<name>`);
+      fail(root, entry.name, `no such operation; expected one of ${[...allowed].join(', ')}, list-<view>, view-<name> or lookup-<name>`);
     }
     const loaded = await loadFolder(root, entry.name, moduleRef, model);
     folders.set(entry.name, loaded.steps);

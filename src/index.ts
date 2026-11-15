@@ -84,6 +84,7 @@ export * from './crud/flow.js';
 export * from './crud/issues.js';
 export * from './crud/json-columns.js';
 export * from './crud/list-query.dto.js';
+export * from './crud/lookup.js';
 export * from './crud/op-context.js';
 export { opsFolder } from './crud/ops-loader.js';
 export * from './crud/status-actions.js';

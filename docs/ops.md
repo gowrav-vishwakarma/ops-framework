@@ -32,6 +32,7 @@ Create, update, and delete use the same order. Their main change is built in: `c
 | `list/` | every list | `GET /` |
 | `list-<view>/` | one named list, after `list/` | `GET /?view=<view>` |
 | `view-<name>/` | a read of one record; steps set `c.result` | `GET /:id/views/<name>` |
+| `lookup-<name>/` | one lookup (a picker in a form), declared in the service's `lookups` | `GET /lookups/<name>` |
 
 An unknown folder, a bad file name, a number in the wrong band, or two files with the same number fails boot. `save` shares its numbers with `create` and `update`. `list` shares its numbers with `list-<view>`.
 
@@ -222,6 +223,26 @@ A `list/` before step pushes onto `c.where`, `c.include`, or `c.order`. An after
 `list-active/410-before-only-active.ts` adds `where status = active`, so `GET /branches?view=active` runs `list/` and then `list-active/`.
 
 `view-usage/` builds `c.result`. `GET /branches/7/views/usage` returns that object. These steps are read only.
+
+## Lookups
+
+A picker in a form (a party, a product, an account) reads `GET /<resource>/lookups/<name>`, declared in the service:
+
+```ts
+protected readonly lookups = {
+  autoselect: { fields: ['name', 'code', 'gstin', 'group.name'], search: ['name', 'code', 'gstin'], defaultFields: ['name', 'code'], defaultSearch: ['name'] },
+};
+```
+
+- Who: any member of the company (a lookup is not the list page). A user with a grant on the resource's list is narrowed
+  by its scope (a grant for some branches); `permission: '<action>'` requires that grant instead.
+- What: `?fields=` and `?search=` choose from the lookup's own `fields` / `search` (the user's "show" and "search by"
+  choices); `alias.field` is a field of an association, read through its include. A name the lookup does not list is
+  refused (400), never dropped. `?q=` is searched in the chosen search fields, any of them, case-insensitive, as text.
+  `?ids=` reads the rows of values already chosen. `?limit=` up to `maxLimit` (default 100; 20 when not given).
+- Its own rules (a branch scope, a special search, prices) are steps in `ops/lookup-<name>/`, run like a list's
+  (`before` adds to `c.where` / `c.include`, `after` decorates `c.rows`).
+- Answer: the rows (plain objects), no count.
 
 ## Setting up a project
 

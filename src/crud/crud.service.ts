@@ -394,7 +394,7 @@ export abstract class CrudService<
     return this.planeTx(async (t) => {
       if (this.ops.steps(op).length === 0) return (await read(page, t)).map((row) => row.get({ plain: true }) as Attrs);
       const c: ListContext<M, Attrs, U> = { ...makeOpBase(this.opEnv(), op, scoped, t), query: query as never, ...page, rows: [], total: 0 };
-      Object.assign(c.state as Record<string, unknown>, { params, search: find.search });
+      Object.assign(c.state as Record<string, unknown>, { params, search: find.search, chosen: find.chosen });
       await this.runSteps(c, false, async () => {
         c.rows = (await read(c, t)) as M[];
         c.total = c.rows.length;

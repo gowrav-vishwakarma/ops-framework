@@ -244,7 +244,11 @@ protected readonly lookups = {
   Business rules (valid on a date, for sales or purchase, a price context) are named parameters declared in `params`
   (`?side=sales&date=2026-11-15`, typed `text` / `number` / `boolean` / `date` / `ids`), read by the steps from
   `c.state.params`; an undeclared query key is refused. The browser never sends a query tree.
-- Fixed conditions (active rows, a group) are the lookup's `where`, added to every request.
+- Fixed conditions (a group, a kind) are the lookup's `where`, added to every request. Conditions for picking a new
+  value only (active rows, valid on a date) are `pickable`: a read of values already chosen (`?ids=`, an old invoice
+  opened for editing whose product is inactive since) skips them, never `where`, the company or the scope. Steps see
+  `c.state.chosen` and skip their own pick-only rules the same way. A resource may declare several lookups (a scheme
+  `pick` for any active scheme, `offer` for the voucher's side and date).
 - A to-many association's field (a branch's `warehouses.name`) is read as its own query (rows stay one per record, the
   limit holds); it can be shown, never searched or filtered.
 - Its own rules (a branch scope, a special search, prices) are steps in `ops/lookup-<name>/`, run like a list's

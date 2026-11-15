@@ -87,4 +87,12 @@ describe('lookup find', () => {
     expect(find.where).toEqual([]);
     expect(find.search).toEqual({ q: 'sun', fields: ['alias'] });
   });
+
+  it('applies pick-only conditions (active, valid now) when picking, not when reading values already chosen; where always', () => {
+    const scoped: LookupDef = { ...def, where: { groupId: 3 }, pickable: { mobile: { [Op.ne]: null } } };
+    expect(buildLookupFind(Party, scoped, { q: 'x' }).where.slice(0, 2)).toEqual([{ groupId: 3 }, { mobile: { [Op.ne]: null } }]);
+    const old = buildLookupFind(Party, scoped, { ids: '5' });
+    expect(old.where).toEqual([{ groupId: 3 }, { id: { [Op.in]: [5] } }]);
+    expect(old.chosen).toBe(true);
+  });
 });

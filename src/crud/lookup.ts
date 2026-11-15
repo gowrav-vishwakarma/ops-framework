@@ -32,8 +32,14 @@ export interface LookupDef {
    * `c.state.params`. A query key the lookup does not declare is refused.
    */
   params?: Readonly<Record<string, LookupParamType>>;
-  /** Conditions every request of the lookup has (active rows only, a group): the server's, never the request's. */
+  /** Conditions every request of the lookup has (a group, a kind): the server's, never the request's. */
   where?: WhereOptions;
+  /**
+   * Conditions for picking a new value only (active rows, valid on a date). Reading values already chosen (`?ids=`: an
+   * old invoice opened for editing, its product inactive since) skips them; `where`, the company and the scope still
+   * apply. Steps see `c.state.chosen` (true for such a read) and skip their own pick-only rules the same way.
+   */
+  pickable?: WhereOptions;
   /**
    * The lookup's steps search (a token search, an alias table...): `search` names are then the steps' own (not checked
    * against the model) and `q` is not applied by the framework; steps find `{ q, fields }` in `c.state.search`.
@@ -92,6 +98,8 @@ export interface LookupFind {
   attributes: FindAttributeOptions;
   /** The chosen search fields and text, for a lookup whose steps search (`searchSteps`). */
   search: { q: string; fields: string[] };
+  /** The request reads values already chosen (`?ids=`): pick-only rules do not apply. */
+  chosen: boolean;
   include: Includeable[];
   where: WhereOptions[];
   order: Order;
@@ -146,7 +154,9 @@ export function buildLookupFind(model: ModelStatic<Model>, def: LookupDef, query
   shown.forEach(place);
   const searchRefs = def.searchSteps ? [] : searched.map((name) => place(searchable(name)));
 
+  const ids = list(query.ids).map(Number).filter((id) => Number.isInteger(id) && id > 0);
   const where: WhereOptions[] = def.where ? [def.where] : [];
+  if (def.pickable && !ids.length) where.push(def.pickable);
   const text = query.q?.trim();
   if (text && searchRefs.length) {
     const like = `%${text.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
@@ -169,7 +179,6 @@ export function buildLookupFind(model: ModelStatic<Model>, def: LookupDef, query
       where.push({ [key]: Array.isArray(value) ? { [Op.in]: values } : value } as WhereOptions);
     }
   }
-  const ids = list(query.ids).map(Number).filter((id) => Number.isInteger(id) && id > 0);
   if (ids.length) where.push({ id: { [Op.in]: ids } });
 
   const limit = Math.min(query.limit ?? def.limit ?? 20, def.maxLimit ?? 100);
@@ -177,6 +186,7 @@ export function buildLookupFind(model: ModelStatic<Model>, def: LookupDef, query
   return {
     attributes: [...own],
     search: { q: text ?? '', fields: searched },
+    chosen: ids.length > 0,
     include: [...joined].map(([as, fields]): Includeable => {
       if (!toMany(as)) return { association: as, attributes: [...fields], required: false };
       // A separate read needs the key back to its record.

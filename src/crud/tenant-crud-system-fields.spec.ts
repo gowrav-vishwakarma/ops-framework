@@ -25,3 +25,26 @@ describe('TenantCrudService system fields', () => {
     expect(dto.id).toBe(3);
   });
 });
+
+describe('TenantCrudService company condition', () => {
+  const service = (name: string) =>
+    Object.assign(Object.create(TenantCrudService.prototype) as object, {
+      model: { name, primaryKeyAttribute: 'id', getAttributes: () => ({ id: {}, companyId: {} }), getTableName: () => `${name}s` },
+    }) as unknown as { pin(ctx: unknown): unknown; stamps(ctx: unknown): unknown; hasAttribute(name: string): boolean };
+  const ctx = { user: { companyId: 7, id: 3 } };
+
+  it("pins a company's rows to the company; a list every company shares (partition.exempt) gets no company condition or stamp", async () => {
+    const { PARTITION } = await import('../tenancy/partition.js');
+    const before = [...PARTITION.exempt];
+    PARTITION.exempt.push('State');
+    try {
+      expect(service('Party').pin(ctx)).toEqual({ companyId: 7 });
+      expect(service('State').pin(ctx)).toEqual({});
+      const shared = service('State');
+      shared.hasAttribute = (field: string) => field === 'companyId';
+      expect(shared.stamps(ctx)).toEqual({});
+    } finally {
+      PARTITION.exempt.splice(0, PARTITION.exempt.length, ...before);
+    }
+  });
+});

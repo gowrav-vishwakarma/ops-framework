@@ -46,13 +46,20 @@ export abstract class TenantCrudService<
   /** The company's rows; on the company table itself (the partition mirror), its own row. */
   protected pin(ctx: ReqCtx<AuthUser>): WhereOptions {
     if (isMirror(this.model as never)) return { [this.model.primaryKeyAttribute]: ctx.user.companyId } as WhereOptions;
+    // A list every company shares (`partition.exempt`: states, currencies): no company condition.
+    if (this.sharedList()) return {};
     return { [PARTITION.field]: ctx.user.companyId } as WhereOptions;
+  }
+
+  /** The model is one list for every company (`partition.exempt`), even when its class declares the partition field. */
+  private sharedList(): boolean {
+    return PARTITION.exempt.includes(this.model.name);
   }
 
   /** The partition, and who created and changed the row when the model has those columns. */
   protected stamps(ctx: ReqCtx<AuthUser>): Attrs {
     return {
-      ...(this.hasAttribute(PARTITION.field) ? { [PARTITION.field]: ctx.user.companyId } : {}),
+      ...(this.hasAttribute(PARTITION.field) && !this.sharedList() ? { [PARTITION.field]: ctx.user.companyId } : {}),
       ...(this.hasAttribute('createdById') ? { createdById: ctx.user.id } : {}),
       ...(this.hasAttribute('updatedById') ? { updatedById: ctx.user.id } : {}),
     };

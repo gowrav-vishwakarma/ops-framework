@@ -257,7 +257,7 @@ protected readonly lookups = {
   `c.state.search` (`{ q, fields }`).
 - Answer: the rows (plain objects), no count.
 - A master the forms pick from but this app does not keep (states, currencies): `lookupController({ service })` offers
-  only `GET lookups/:name` (extend it under `@Controller('states')`).
+  only `GET lookups/:name` (extend it under `@Controller('states')`); `plane: 'control'` for an admin collection.
 
 ## Setting up a project
 

@@ -183,9 +183,10 @@ export interface LookupRoutes<S> {
 
 /**
  * Only the lookups of a collection (`GET lookups/:name`): a master the forms pick from but nobody keeps from
- * this app (states, currencies). The service is a CRUD service; its other routes are not offered.
+ * this app (states, currencies). The service is a CRUD service; its other routes are not offered. `plane: 'control'`:
+ * an admin-panel collection's lookups (`ControlCrudService`), admin tokens only.
  */
-export function lookupController<S extends object>(options: { service: Type<S> }): Type<LookupRoutes<S>> {
+export function lookupController<S extends object>(options: { service: Type<S>; plane?: 'tenant' | 'control' }): Type<LookupRoutes<S>> {
   abstract class LookupBase {
     @Inject(options.service) readonly service: S;
 
@@ -195,5 +196,6 @@ export function lookupController<S extends object>(options: { service: Type<S> }
     }
   }
   Reflect.defineMetadata('design:paramtypes', [Object, String, LookupQueryDto, Object], LookupBase.prototype, 'lookup');
+  if (options.plane === 'control') AdminRoutes()(LookupBase);
   return LookupBase as unknown as Type<LookupRoutes<S>>;
 }

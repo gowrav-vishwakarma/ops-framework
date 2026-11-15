@@ -60,7 +60,8 @@ export class LookupQueryDto {
   @IsOptional() @IsString() @MaxLength(2000) ids?: string;
   /** JSON object of conditions on the lookup's `filters` fields: a value, or a list of values. */
   @IsOptional() @IsString() @MaxLength(4000) filters?: string;
-  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(500) limit?: number;
+  /** Rows asked for; the lookup keeps it within its `maxLimit` (a picker asking 1000 gets its cap, not a refusal). */
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(10000) limit?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) offset?: number;
 }
 

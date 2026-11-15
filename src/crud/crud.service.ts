@@ -388,12 +388,13 @@ export abstract class CrudService<
     const find = buildLookupFind(this.model as never, def, query);
     const page = { where: [this.scopeWhere(scoped), ...find.where], include: find.include, order: find.order, limit: find.limit, offset: find.offset, attributes: find.attributes };
     const op = `lookup-${name}`;
-    const read = async (p: Pick<ListContext<M, Attrs, U>, 'where' | 'include' | 'order' | 'limit' | 'offset' | 'attributes'>, t?: Transaction) =>
-      this.model.findAll({ where: { [Op.and]: p.where } as WhereOptions, include: p.include, ...(p.attributes ? { attributes: p.attributes } : {}), order: p.order, limit: p.limit, offset: p.offset, subQuery: false, ...(t ? { transaction: t } : {}) });
-    if (this.ops.steps(op).length === 0) return (await read(page)).map((row) => row.get({ plain: true }) as Attrs);
+    const read = async (p: Pick<ListContext<M, Attrs, U>, 'where' | 'include' | 'order' | 'limit' | 'offset' | 'attributes'>, t: Transaction) =>
+      this.model.findAll({ where: { [Op.and]: p.where } as WhereOptions, include: p.include, ...(p.attributes ? { attributes: p.attributes } : {}), order: p.order, limit: p.limit, offset: p.offset, subQuery: false, transaction: t });
+    // Always in the plane's transaction: a lookup's conditions may name other tables (`where`, steps).
     return this.planeTx(async (t) => {
+      if (this.ops.steps(op).length === 0) return (await read(page, t)).map((row) => row.get({ plain: true }) as Attrs);
       const c: ListContext<M, Attrs, U> = { ...makeOpBase(this.opEnv(), op, scoped, t), query: query as never, ...page, rows: [], total: 0 };
-      (c.state as Record<string, unknown>).params = params;
+      Object.assign(c.state as Record<string, unknown>, { params, search: find.search });
       await this.runSteps(c, false, async () => {
         c.rows = (await read(c, t)) as M[];
         c.total = c.rows.length;

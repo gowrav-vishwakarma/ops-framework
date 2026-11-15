@@ -32,6 +32,13 @@ export interface LookupDef {
    * `c.state.params`. A query key the lookup does not declare is refused.
    */
   params?: Readonly<Record<string, LookupParamType>>;
+  /** Conditions every request of the lookup has (active rows only, a group): the server's, never the request's. */
+  where?: WhereOptions;
+  /**
+   * The lookup's steps search (a token search, an alias table...): `search` names are then the steps' own (not checked
+   * against the model) and `q` is not applied by the framework; steps find `{ q, fields }` in `c.state.search`.
+   */
+  searchSteps?: boolean;
 }
 
 export type LookupParamType = 'text' | 'number' | 'boolean' | 'date' | 'ids';
@@ -83,6 +90,8 @@ export function lookupParams(def: LookupDef, raw: Record<string, unknown>): Reco
 /** What one lookup request reads: columns, joins, conditions, page. */
 export interface LookupFind {
   attributes: FindAttributeOptions;
+  /** The chosen search fields and text, for a lookup whose steps search (`searchSteps`). */
+  search: { q: string; fields: string[] };
   include: Includeable[];
   where: WhereOptions[];
   order: Order;
@@ -127,10 +136,17 @@ export function buildLookupFind(model: ModelStatic<Model>, def: LookupDef, query
     joined.set(first!, (joined.get(first!) ?? new Set(['id'])).add(second));
     return `$${first}.${second}$`;
   };
+  /** A to-many association (a branch's warehouses) is read as its own query: rows stay one per record and the limit holds. */
+  const toMany = (as: string) => model.associations[as]?.isMultiAssociation === true;
+  const searchable = (name: string) => {
+    const [first, second] = name.split('.');
+    if (second && toMany(first!)) throw new BadRequestException(`${name} lists many rows and cannot be searched or filtered`);
+    return name;
+  };
   shown.forEach(place);
-  const searchRefs = searched.map(place);
+  const searchRefs = def.searchSteps ? [] : searched.map((name) => place(searchable(name)));
 
-  const where: WhereOptions[] = [];
+  const where: WhereOptions[] = def.where ? [def.where] : [];
   const text = query.q?.trim();
   if (text && searchRefs.length) {
     const like = `%${text.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
@@ -146,7 +162,7 @@ export function buildLookupFind(model: ModelStatic<Model>, def: LookupDef, query
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new BadRequestException('filters must be a JSON object');
     for (const [field, value] of Object.entries(parsed as Record<string, unknown>)) {
       if (!(def.filters ?? []).includes(field)) throw new BadRequestException(`Filter not allowed in this lookup: ${field}`);
-      const ref = place(field);
+      const ref = place(searchable(field));
       const key = ref.startsWith('$') ? ref : ref.slice(model.name.length + 1);
       const values = Array.isArray(value) ? value : [value];
       if (!values.every((v) => v === null || ['string', 'number', 'boolean'].includes(typeof v))) throw new BadRequestException(`Filter ${field} takes a value or a list of values`);
@@ -160,7 +176,13 @@ export function buildLookupFind(model: ModelStatic<Model>, def: LookupDef, query
   const firstOwn = (def.defaultFields ?? def.fields).find((name) => !name.includes('.')) ?? 'id';
   return {
     attributes: [...own],
-    include: [...joined].map(([as, fields]) => ({ association: as, attributes: [...fields], required: false })),
+    search: { q: text ?? '', fields: searched },
+    include: [...joined].map(([as, fields]): Includeable => {
+      if (!toMany(as)) return { association: as, attributes: [...fields], required: false };
+      // A separate read needs the key back to its record.
+      const foreignKey = (model.associations[as] as unknown as { foreignKey: string }).foreignKey;
+      return { association: as, attributes: [...new Set([...fields, foreignKey])], separate: true };
+    }),
     where,
     order: def.order ?? [[firstOwn, 'ASC']],
     limit: ids.length ? Math.max(limit, ids.length) : limit,

@@ -244,9 +244,16 @@ protected readonly lookups = {
   Business rules (valid on a date, for sales or purchase, a price context) are named parameters declared in `params`
   (`?side=sales&date=2026-11-15`, typed `text` / `number` / `boolean` / `date` / `ids`), read by the steps from
   `c.state.params`; an undeclared query key is refused. The browser never sends a query tree.
+- Fixed conditions (active rows, a group) are the lookup's `where`, added to every request.
+- A to-many association's field (a branch's `warehouses.name`) is read as its own query (rows stay one per record, the
+  limit holds); it can be shown, never searched or filtered.
 - Its own rules (a branch scope, a special search, prices) are steps in `ops/lookup-<name>/`, run like a list's
-  (`before` adds to `c.where` / `c.include`, `after` decorates `c.rows`).
+  (`before` adds to `c.where` / `c.include`, `after` decorates `c.rows`), always in the plane's transaction. With
+  `searchSteps: true` the steps search: `search` names are their own and `q` is not applied; they read
+  `c.state.search` (`{ q, fields }`).
 - Answer: the rows (plain objects), no count.
+- A master the forms pick from but this app does not keep (states, currencies): `lookupController({ service })` offers
+  only `GET lookups/:name` (extend it under `@Controller('states')`).
 
 ## Setting up a project
 

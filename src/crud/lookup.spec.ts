@@ -5,10 +5,13 @@ import { buildLookupFind, lookupParams, type LookupDef } from './lookup.js';
 
 class Party extends Model {}
 class Group extends Model {}
+class Phone extends Model {}
 const sequelize = new Sequelize('postgres://x@localhost/x', { logging: false });
 Group.init({ name: DataTypes.STRING, code: DataTypes.STRING }, { sequelize, modelName: 'Group' });
 Party.init({ name: DataTypes.STRING, gstin: DataTypes.STRING, mobile: DataTypes.STRING, groupId: DataTypes.INTEGER, secret: DataTypes.STRING }, { sequelize, modelName: 'Party' });
 Party.belongsTo(Group, { as: 'group', foreignKey: 'groupId' });
+Phone.init({ number: DataTypes.STRING, partyId: DataTypes.INTEGER }, { sequelize, modelName: 'Phone' });
+Party.hasMany(Phone, { as: 'phones', foreignKey: 'partyId' });
 
 const def: LookupDef = { fields: ['name', 'gstin', 'mobile', 'group.name'], search: ['name', 'gstin', 'group.name'], defaultFields: ['name', 'gstin'], defaultSearch: ['name'] };
 
@@ -63,5 +66,25 @@ describe('lookup find', () => {
     expect(() => lookupParams(withParams, { other: '1' })).toThrow('Unknown lookup parameter: other');
     expect(() => lookupParams(withParams, { date: '15/11/2026' })).toThrow('date must be a date');
     expect(() => lookupParams(withParams, { accountId: 'abc' })).toThrow('accountId must be a number');
+  });
+
+  it("adds the lookup's own conditions to every request (never the request's to drop)", () => {
+    const find = buildLookupFind(Party, { ...def, where: { mobile: { [Op.ne]: null } } }, { q: 'x' });
+    expect(find.where[0]).toEqual({ mobile: { [Op.ne]: null } });
+    expect(find.where).toHaveLength(2);
+  });
+
+  it('reads a to-many association as its own query (one row per record, the limit holds); it cannot be searched or filtered', () => {
+    const many: LookupDef = { fields: ['name', 'phones.number'], search: ['name', 'phones.number'], defaultSearch: ['name'], filters: ['phones.number'] };
+    expect(buildLookupFind(Party, many, { fields: 'name,phones.number' }).include).toEqual([{ association: 'phones', attributes: ['id', 'number', 'partyId'], separate: true }]);
+    expect(() => buildLookupFind(Party, many, { q: 'x', search: 'phones.number' })).toThrow('cannot be searched or filtered');
+    expect(() => buildLookupFind(Party, many, { filters: '{"phones.number":"1"}' })).toThrow('cannot be searched or filtered');
+  });
+
+  it('leaves the search to the steps when the lookup says so: its names are its own and q is not applied', () => {
+    const own: LookupDef = { fields: ['name'], search: ['name', 'alias'], searchSteps: true };
+    const find = buildLookupFind(Party, own, { q: 'sun', search: 'alias' });
+    expect(find.where).toEqual([]);
+    expect(find.search).toEqual({ q: 'sun', fields: ['alias'] });
   });
 });

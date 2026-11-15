@@ -32,16 +32,16 @@ interface CrudOptions<S> {
   plane?: 'tenant' | 'control';
 }
 
-/**
- * The standard routes of a collection, guarded by `resource.view|create|update|delete`: a tenant's
- * (`TenantCrudService`) or, with `plane: 'control'`, the admin panel's (`ControlCrudService`).
- * Extend the returned class under `@Controller('path')` and add module routes beside them.
- */
 /** The caller's context with the scope, limits and scope data of another grant (an action's). */
 function withGrant(ctx: ReqCtx, grant: Grant): ReqCtx {
   return { ...ctx, scope: grant.scope, limits: grant.limits, ...(grant.params ? { scopeParams: grant.params } : { scopeParams: undefined }) };
 }
 
+/**
+ * The standard routes of a collection, guarded by `resource.view|create|update|delete`: a tenant's
+ * (`TenantCrudService`) or, with `plane: 'control'`, the admin panel's (`ControlCrudService`).
+ * Extend the returned class under `@Controller('path')` and add module routes beside them.
+ */
 export function crudController<S extends object>(
   options: CrudOptions<S>,
 ): Type<CrudRoutes<S>> {
@@ -57,7 +57,6 @@ export function crudController<S extends object>(
       return (this.service as AnyService).allowedActions(ctx);
     }
 
-    /** Run one named action. Needs its own permission, checked here against the caller's scope. */
     /** A lookup (a picker in a form): any member of the company; the service applies the lookup's own rules. */
     @Get('lookups/:name')
     lookup(@Ctx() ctx: ReqCtx, @Param('name') name: string, @Query() query: LookupQueryDto, @Req() req: { query?: Record<string, unknown> }) {
@@ -65,6 +64,7 @@ export function crudController<S extends object>(
       return (this.service as AnyService).lookup(ctx, name, query, req.query ?? {});
     }
 
+    /** Run one named action. Needs its own permission, checked here against the caller's scope. */
     @Post(':id/actions/:name')
     @RequirePermission(resource, 'view')
     async act(
@@ -174,4 +174,26 @@ interface AnyService {
   perform(ctx: ReqCtx, id: number, name: string, input: Record<string, unknown>): Promise<unknown>;
   performAction(ctx: ReqCtx, name: string, body: Record<string, unknown>): Promise<unknown>;
   view(ctx: ReqCtx, id: number, name: string): Promise<unknown>;
+}
+
+export interface LookupRoutes<S> {
+  service: S;
+  lookup(ctx: ReqCtx, name: string, query: LookupQueryDto, raw?: Record<string, unknown>): Promise<unknown>;
+}
+
+/**
+ * Only the lookups of a collection (`GET lookups/:name`): a master the forms pick from but nobody keeps from
+ * this app (states, currencies). The service is a CRUD service; its other routes are not offered.
+ */
+export function lookupController<S extends object>(options: { service: Type<S> }): Type<LookupRoutes<S>> {
+  abstract class LookupBase {
+    @Inject(options.service) readonly service: S;
+
+    @Get('lookups/:name')
+    lookup(@Ctx() ctx: ReqCtx, @Param('name') name: string, @Query() query: LookupQueryDto, @Req() req: { query?: Record<string, unknown> }) {
+      return (this.service as AnyService).lookup(ctx, name, query, req.query ?? {});
+    }
+  }
+  Reflect.defineMetadata('design:paramtypes', [Object, String, LookupQueryDto, Object], LookupBase.prototype, 'lookup');
+  return LookupBase as unknown as Type<LookupRoutes<S>>;
 }

@@ -25,6 +25,12 @@ export interface ScopeDef<M extends Model = Model, U extends Actor = AuthUser> {
    * related: it limits the operation's own records only.
    */
   related?: boolean;
+  /**
+   * Offered by every resource, whatever its own scope list says: for a scope whose `where` decides by itself what it means
+   * for each model (Ankpal's per-branch grants: rows of those branches where the model has a branch, all rows where it
+   * has none). Without it, a grant with this scope on a resource that does not list it is refused.
+   */
+  everywhere?: boolean;
 }
 
 /**
@@ -83,5 +89,6 @@ export function resolveScopes(refs: readonly ScopeRef[], registered: readonly Sc
     if (!scope) throw new Error(`Unknown scope "${String(ref)}". Register it in FrameworkOptions.scopes or declare it in place.`);
     out.set(scope.id, scope);
   }
+  for (const scope of registered) if (scope.everywhere && !out.has(scope.id)) out.set(scope.id, scope as ScopeDef);
   return out;
 }

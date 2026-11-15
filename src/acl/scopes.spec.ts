@@ -38,4 +38,12 @@ describe('scopes', () => {
     expect([...resolved.keys()]).toEqual(['all', 'active-only', 'my-team']);
     expect(() => resolveScopes(['nonsense'], BUILT_IN_SCOPES)).toThrow(/Unknown scope "nonsense"/);
   });
+
+  it('a scope marked `everywhere` is offered by every resource, whatever its own list says', () => {
+    const perBranch: ScopeDef = { id: 'branches', label: 'Selected branches', everywhere: true, where: () => null };
+    const resolved = resolveScopes(['all'], [...BUILT_IN_SCOPES, perBranch]);
+    expect([...resolved.keys()]).toEqual(['all', 'branches']);
+    expect([...resolveScopes(['all', 'branches'], [...BUILT_IN_SCOPES, perBranch]).keys()]).toEqual(['all', 'branches']);
+    expect([...resolveScopes(['all'], BUILT_IN_SCOPES).keys()]).toEqual(['all']);
+  });
 });

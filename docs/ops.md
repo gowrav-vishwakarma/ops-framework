@@ -444,7 +444,7 @@ The same operations framework runs the platform's admin panel: `ControlCrudServi
 
 A grant is `{ scope, limits }`. The catalog lists the scope ids each permission accepts; roles and per-user overrides store the id and the limits (JSONB). Both are validated on save: unknown code, scope the entry does not offer, unknown limit key, or a negative number is a field error on `permissions`.
 
-**Scopes** are strings resolved through a registry. `all`, `branch` and `own` are built in; the app adds more through `options.scopes`, and a service lists the ones it supports in `protected readonly scopes`:
+**Scopes** are strings resolved through a registry. `all`, `branch` and `own` are built in; the app adds more through `options.scopes`, and a service lists the ones it supports in `protected readonly scopes`. A registered scope marked `everywhere: true` is offered by every resource on top of its list: one whose `where` decides by itself what it means for each model (Ankpal's per-branch grants, all rows of a model without a branch). Without it, a grant with a scope the resource does not list is refused (`Unknown access scope`):
 
 ```ts
 export const activeOnlyScope: ScopeDef = {

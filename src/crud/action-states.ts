@@ -4,6 +4,7 @@ import type { ScopeDef, ScopeEnv } from '../acl/scopes.js';
 import type { ReqCtx } from '../auth/auth-user.js';
 import type { Model } from 'sequelize-typescript';
 import { startStateReason } from './row-checks.js';
+import { permissionLabel } from '../acl/permission-denied.js';
 import { guardsFor, type RowGuard } from './row-guard.js';
 import type { ActionState, EntityAction } from './entity-action.js';
 
@@ -19,6 +20,8 @@ export interface ActionStateEnv<M extends Model> {
   actionPermission(action: EntityAction<M, any>): string;
   /** Permission code of a built-in operation (`update`, `delete`). Default `${resource}.${op}`. */
   permission?(op: string): string;
+  /** Words for a permission code in a refusal (`permissionLabel`). Default: the code humanized. */
+  permissionLabel?(code: string): string;
 }
 
 /**
@@ -38,11 +41,11 @@ export async function computeActionStates<M extends Model>(
   const can = async (code: string) => granted.has(code);
   const decide = async (name: string, code: string, extra: { action?: EntityAction<M, any>; limits?: readonly LimitDef<M>[] }): Promise<ActionState> => {
     const grant = granted.get(code);
-    if (!grant) return { allowed: false, reason: 'You do not have permission' };
+    if (!grant) return { allowed: false, reason: `You don't have permission to ${env.permissionLabel?.(code) ?? permissionLabel(undefined, code)}`, denied: 'permission' };
     const own: ReqCtx = { ...ctx, scope: grant.scope, limits: grant.limits, ...(grant.params ? { scopeParams: grant.params } : {}) };
     const scope = env.scopes.get(grant.scope);
     if (!scope) return { allowed: false, reason: `Unknown access scope "${grant.scope}"` };
-    if (scope.allows && !scope.allows(own, row as never, env.scopeEnv)) return { allowed: false, reason: 'Outside your access scope' };
+    if (scope.allows && !scope.allows(own, row as never, env.scopeEnv)) return { allowed: false, reason: 'This record is outside the access you were given', denied: 'permission' };
     const { action } = extra;
     const state = action ? startStateReason(action, row) : null;
     if (state) return { allowed: false, reason: state };

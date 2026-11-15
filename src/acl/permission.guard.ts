@@ -1,10 +1,11 @@
-import { ForbiddenException, Inject, Injectable, Optional, type CanActivate, type ExecutionContext } from '@nestjs/common';
+import { Inject, Injectable, Optional, type CanActivate, type ExecutionContext } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { IS_PUBLIC, REQUIRED_PERMISSION, type RequiredPermission, type CtxRequest } from '../auth/decorators.js';
 import { AdminAclService } from '../admin/admin-acl.service.js';
 import { FRAMEWORK_OPTIONS, type FrameworkOptions } from '../options.js';
 import { AclService } from './acl.service.js';
 import { permissionCode } from './permission-code.js';
+import { permissionDenied } from './permission-denied.js';
 
 /** Enforces `@RequirePermission` and records the granted scope and limits for the service. */
 @Injectable()
@@ -28,7 +29,7 @@ export class PermissionGuard implements CanActivate {
     const granted = request.admin ? await this.adminAcl!.effective(request.admin) : request.user ? await this.acl!.effective(request.user) : null;
     if (!granted) return false;
     const grant = granted.get(code);
-    if (!grant) throw new ForbiddenException(`You do not have permission: ${code}`);
+    if (!grant) throw permissionDenied(request.admin ? undefined : this.options, code);
     request.aclScope = grant.scope;
     request.aclLimits = grant.limits;
     if (grant.params) request.aclScopeParams = grant.params;

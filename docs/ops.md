@@ -189,7 +189,9 @@ An action also says how the UI shows it. All fields are optional and travel in `
 | `hideInAcl` | keep the permission out of the role matrix (still enforced) |
 | `available(row, ctx)` | a reason the action cannot run on this row now, or `null` |
 
-`GET /<resource>?actions=1` adds `_actions` to every row: `{ <name>: { allowed, reason } }`, one entry per action the caller holds plus `update` and `delete`. `allowed` is false with a reason when the row is in the wrong state (`from`), outside the caller's scope, refused by a row guard (a locked period), over a limit or soft deleted, or when `available` says no. It is a hint for buttons; the steps still decide.
+`GET /<resource>?actions=1` adds `_actions` to every row: `{ <name>: { allowed, reason } }`, one entry per action the caller holds plus `update` and `delete`. `allowed` is false with a reason when the row is in the wrong state (`from`), outside the caller's scope, refused by a row guard (a locked period), over a limit or soft deleted, or when `available` says no. When the reason is the caller's rights (no grant, or the row is outside the granted scope), the state also has `denied: 'permission'`: a client shows those apart from a row that cannot take the action (a system record, a wrong state), because only the owner or an administrator can change them. The reason is in words (`You don't have permission to edit account`). It is a hint for buttons; the steps still decide.
+
+**Permission refusals.** A missing right is refused with `PermissionDeniedException` (403): `{ statusCode, error, code: 'PERMISSION_DENIED', permission, message }`, where the message is a sentence a person reads ("You don't have permission to delete account. Ask the owner or your administrator to give you this right."). The guard, the CRUD service and lookups all throw it through `permissionDenied(options, code)`; project code refusing on a right uses the same. The words come from the catalog entry's label, else `acl.actionLabels` (on top of the framework's View/Create/Edit/Delete…) and the humanized resource. Licence and system refusals keep their own codes, so a client can tell the three apart.
 
 ## After every save: `afterSave`
 
@@ -299,6 +301,7 @@ The options (`FrameworkOptions`) carry the rest:
 | --- | --- |
 | `catalog`, `scopes` | permissions (resource, action, scopes, limits) and scope providers beyond `all`, `branch`, `own` |
 | `acl.actionNames`, `acl.code` | how permission codes are spelled: the framework asks for `list`, `view`, `create`, `update`, `delete`, `restore` and action names (Ankpal: `{ list: 'page', update: 'edit' }`); default code `${resource}.${action}`, `list` defaults to `view` |
+| `acl.actionLabels` | words for action names in permission refusals, on top of the framework's (`{ page: 'Open' }`); a catalog label wins |
 | `acl.userStatusColumn` | `features.acl: 'tables'`: a column of `NAMES.userTable` (`'status'`); a user whose value there is not `'active'` is refused (403) when permissions load. Off by default; cached with the permissions, so call `AclService.forgetUser` after changing it (TMS: the users save step) |
 | `tenancy.partition`, `resolve`, `placement`, `sharedSchema` | partition, user to tenant (default `{ companyId, tenantKey }`), `single` / `schemaPerTenant` / `routed` |
 | `tenancy.headers` | headers checked against the token (default `x-company-id` -> companyId, `x-tenant-id` -> tenantKey or companyId); a mismatch is 403 |

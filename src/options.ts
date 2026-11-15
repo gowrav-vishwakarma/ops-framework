@@ -38,6 +38,11 @@ export interface FrameworkOptions {
     actionNames?: Record<string, string>;
     code?: (resource: string, action: string) => string;
     /**
+     * Words for action names in a refusal ("You don't have permission to <label> <resource>"), on top of the framework's
+     * (`view`, `create`, `update` → View, Create, Edit …). A catalog entry's own label wins.
+     */
+    actionLabels?: Record<string, string>;
+    /**
      * `features.acl: 'tables'`: a column of `NAMES.userTable` holding the user's status (`'status'`).
      * When set, a user whose row there is not `'active'` is refused (403) when permissions load.
      * Cached with the permissions: call `AclService.forgetUser` after changing it.

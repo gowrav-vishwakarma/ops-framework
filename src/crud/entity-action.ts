@@ -96,4 +96,8 @@ export interface ActionInfo {
 }
 
 /** What `?actions=1` adds to each record: whether the caller can run each action on it now, and why not. */
-export type ActionState = { allowed: boolean; reason: string | null };
+/**
+ * Whether an action can run on a record now, and why not. `denied: 'permission'` when the user was not given the right
+ * (shown apart from a record that cannot take the action, e.g. a system record); absent otherwise.
+ */
+export type ActionState = { allowed: boolean; reason: string | null; denied?: 'permission' };

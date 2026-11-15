@@ -23,6 +23,7 @@ import { allScope, resolveScopes, type ScopeDef, type ScopeRef } from '../acl/sc
 import type { Actor, ReqCtx } from '../auth/auth-user.js';
 import { flattenValidationErrors } from '../errors.js';
 import { FRAMEWORK_OPTIONS, type FrameworkOptions } from '../options.js';
+import { permissionDenied, permissionLabel } from '../acl/permission-denied.js';
 import { computeActionStates } from './action-states.js';
 import type { ActionInfo, EntityAction } from './entity-action.js';
 import { describeEntityFlow, type EntityFlow } from './flow.js';
@@ -264,7 +265,7 @@ export abstract class CrudService<
   /** The caller's grant of `code` (scope and limits), or 403. */
   async grantOf(ctx: ReqCtx<U>, code: string): Promise<Grant> {
     const grant = (await this.effective(ctx)).get(code);
-    if (!grant) throw new ForbiddenException(`You do not have permission: ${code}`);
+    if (!grant) throw permissionDenied(this.frameworkOptions, code);
     return grant;
   }
 
@@ -326,7 +327,7 @@ export abstract class CrudService<
     if (!wanted) return false;
     if (!this.softDelete) throw new BadRequestException(`${this.label} has no deleted records`);
     const restore = this.permission('restore');
-    if (!(await this.effective(ctx)).has(restore)) throw new ForbiddenException(`You do not have permission: ${restore}`);
+    if (!(await this.effective(ctx)).has(restore)) throw permissionDenied(this.frameworkOptions, restore);
     return true;
   }
 
@@ -381,7 +382,7 @@ export abstract class CrudService<
     const def = Object.prototype.hasOwnProperty.call(this.lookups, name) ? this.lookups[name] : undefined;
     if (!def) throw new NotFoundException(`Unknown lookup: ${name}`);
     const granted = await this.effective(ctx);
-    if (def.permission && !granted.has(this.permission(def.permission))) throw new ForbiddenException(`You do not have permission: ${this.permission(def.permission)}`);
+    if (def.permission && !granted.has(this.permission(def.permission))) throw permissionDenied(this.frameworkOptions, this.permission(def.permission));
     const grant = granted.get(this.permission(def.permission ?? 'list'));
     const scoped = grant ? ({ ...ctx, scope: grant.scope, limits: grant.limits ?? {}, ...(grant.params ? { scopeParams: grant.params } : {}) } as ReqCtx<U>) : ({ ...ctx, scope: 'all' } as ReqCtx<U>);
     const params = lookupParams(def, raw);
@@ -466,6 +467,7 @@ export abstract class CrudService<
       model: this.model,
       actionPermission: (action: EntityAction<M, U>) => this.actionPermission(action),
       permission: (action: string) => this.permission(action),
+      permissionLabel: (code: string) => permissionLabel(this.frameworkOptions, code),
     };
     for (const row of rows) row.setDataValue('_actions' as never, (await computeActionStates(env as never, ctx as never, row, granted, prepared)) as never);
   }

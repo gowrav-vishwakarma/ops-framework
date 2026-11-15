@@ -48,11 +48,11 @@ describe('_actions: what each button can do on this row', () => {
   });
 
   it('gives the reason: no permission, wrong state, over limit, outside scope, unavailable', async () => {
-    expect((await computeActionStates(env, ctx, row({ status: 'draft', total: 500 }), grants({}))).approve).toEqual({ allowed: false, reason: 'You do not have permission' });
+    expect((await computeActionStates(env, ctx, row({ status: 'draft', total: 500 }), grants({}))).approve).toEqual({ allowed: false, reason: "You don't have permission to approve invoice", denied: 'permission' });
     expect((await computeActionStates(env, ctx, row({ status: 'paid', total: 500 }), full)).approve?.reason).toContain('not possible while status is "paid"');
     expect((await computeActionStates(env, ctx, row({ status: 'draft', total: 5000 }), full)).approve?.reason).toBe('Above your limit of 1,000');
     const branchOnly = grants({ 'invoice.update': { scope: 'branch' } });
-    expect((await computeActionStates(env, ctx, row({ branchId: 9 }), branchOnly)).update?.reason).toBe('Outside your access scope');
+    expect((await computeActionStates(env, ctx, row({ branchId: 9 }), branchOnly)).update).toEqual({ allowed: false, reason: 'This record is outside the access you were given', denied: 'permission' });
     expect((await computeActionStates(env, ctx, row({ hasOpenItems: true }), full)).close?.reason).toBe('Open items remain');
   });
 

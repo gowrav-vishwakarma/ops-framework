@@ -47,6 +47,7 @@ export * from './acl/catalog.js';
 export * from './acl/catalog-types.js';
 export * from './acl/limits.js';
 export * from './acl/permission-catalog.service.js';
+export * from './acl/permission-denied.js';
 export * from './acl/permission.model.js';
 export * from './acl/role.model.js';
 export * from './acl/role-permission.model.js';

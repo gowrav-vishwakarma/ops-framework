@@ -54,7 +54,7 @@ export function bindTenantModels(primary: Sequelize, control: () => Sequelize): 
     // Cache rules watch tenant and control models alike (installed here, never in the model files a project copies).
     installCacheRuleHooks(model as never);
     // The request's user as the creator of every new row, tenant and control models alike (`auth/actor.ts`).
-    installCreatorStampHooks(model as never);
+    installCreatorStampHooks(model as never, isControlModel(model) ? 'admin' : 'company');
     if (isControlModel(model)) {
       Object.defineProperty(model, 'sequelize', { configurable: true, get: () => control(), set: refuse(model.name, 'sequelize') });
       continue;

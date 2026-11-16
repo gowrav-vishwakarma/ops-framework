@@ -72,13 +72,13 @@ export class JwtAuthGuard implements CanActivate {
       const admin = this.options.admin.userClaims(claims);
       const extra = await this.adminTokens?.validate(claims, admin, request);
       request.admin = extra ? { ...admin, ...extra } : admin;
-      setActor(request.admin.id);
+      setActor(request.admin.id, 'admin');
       return true;
     }
     if (kind === 'access') {
       request.user = this.options.auth.userClaims(claims);
       request.claims = claims;
-      setActor(request.user.id);
+      setActor(request.user.id, 'company');
       return true;
     }
     if (kind === 'login' && this.reflector.getAllAndOverride<boolean>(IS_LOGIN_TOKEN, targets)) {

@@ -6,6 +6,7 @@ import { FRAMEWORK_OPTIONS, type FrameworkOptions } from '../options.js';
 import { PARTITION } from '../tenancy/partition.js';
 import { ADMIN_TOKEN_VALIDATOR, API_KEY_VALIDATOR, type AdminTokenValidator, type ApiKeyValidator } from '../features.js';
 import { AUDIENCES, IS_ADMIN, IS_LOGIN_TOKEN, IS_PUBLIC, type CtxRequest } from './decorators.js';
+import { setActor } from './actor.js';
 
 export type TokenKind = 'access' | 'login' | 'admin' | null;
 
@@ -71,11 +72,13 @@ export class JwtAuthGuard implements CanActivate {
       const admin = this.options.admin.userClaims(claims);
       const extra = await this.adminTokens?.validate(claims, admin, request);
       request.admin = extra ? { ...admin, ...extra } : admin;
+      setActor(request.admin.id);
       return true;
     }
     if (kind === 'access') {
       request.user = this.options.auth.userClaims(claims);
       request.claims = claims;
+      setActor(request.user.id);
       return true;
     }
     if (kind === 'login' && this.reflector.getAllAndOverride<boolean>(IS_LOGIN_TOKEN, targets)) {

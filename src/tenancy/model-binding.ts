@@ -1,4 +1,5 @@
 import { installWriteGuardHooks } from '../crud/write-guard.js';
+import { installCreatorStampHooks } from '../auth/actor.js';
 import { installBulkCreateChunking } from '../db/bulk-chunks.js';
 import { ForbiddenException, InternalServerErrorException, Logger } from '@nestjs/common';
 import { Op, type ModelStatic, type WhereOptions } from 'sequelize';
@@ -52,6 +53,8 @@ export function bindTenantModels(primary: Sequelize, control: () => Sequelize): 
     BOUND.add(model);
     // Cache rules watch tenant and control models alike (installed here, never in the model files a project copies).
     installCacheRuleHooks(model as never);
+    // The request's user as the creator of every new row, tenant and control models alike (`auth/actor.ts`).
+    installCreatorStampHooks(model as never);
     if (isControlModel(model)) {
       Object.defineProperty(model, 'sequelize', { configurable: true, get: () => control(), set: refuse(model.name, 'sequelize') });
       continue;

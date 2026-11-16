@@ -99,6 +99,7 @@ export * from './notify/notifier.service.js';
 // Tenancy
 export { PRIMARY, CONTROL, connectionOptions, isPooler, ConnectionRegistry, type PoolStats } from './tenancy/connection-registry.js';
 export { currentTenant, requireTenant, runWithTenant, quoteIdent, tbl, TenantContextError, type TenantRef, type Placement, type TenantContext } from './tenancy/context.js';
+export { currentActor, setActor, installCreatorStampHooks } from './auth/actor.js';
 export { CompanyInputPipe, CompanyInputRefused, checkCompanyInput } from './tenancy/company-input.js';
 export { installCompanySqlCheck, missingCompany, CompanySqlRefused, type CompanySqlCheck } from './tenancy/company-sql.js';
 export * from './tenancy/control/tenant-routing.model.js';

@@ -433,6 +433,9 @@ A contract answered in the process is called in process; otherwise over internal
 - Each migration runs in its own transaction with the schema's `search_path`, is recorded in `framework_migrations` in that transaction, and holds an advisory lock per schema, so two runners never apply it twice. Dev `alter` syncs take the same lock.
 - A new place (a new company in its own schema, a new shard) is built from the models and records every existing migration as applied. A request to a schema whose tables lag the models gets 503.
 - Run the migration job before rolling out new code, as a one-off task (Kubernetes Job, ECS task) with `SERVICES` unset, so every model is known.
+- With `features.schema: 'external'` (another system owns the schema) every pool refuses schema changes. Code whose
+  job is one (provisioning a tenant's schema, dropping it when its provisioning failed) wraps exactly that work in
+  `allowSchemaChange('<reason>', () => work)`: allowed for that async work only, refused everywhere else.
 
 ## Admin side (control plane)
 

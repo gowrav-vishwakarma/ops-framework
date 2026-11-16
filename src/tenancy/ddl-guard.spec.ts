@@ -1,6 +1,6 @@
 import { Sequelize } from 'sequelize-typescript';
 import { describe, expect, it } from 'vitest';
-import { installDdlGuard } from './guards.js';
+import { allowSchemaChange, installDdlGuard } from './guards.js';
 
 describe('DDL guard (schema owned by another system)', () => {
   const guarded = () => {
@@ -34,5 +34,13 @@ describe('DDL guard (schema owned by another system)', () => {
     const sequelize = guarded();
     await expect(sequelize.query('SELECT 1')).rejects.not.toThrow(/Refused/);
     await expect(sequelize.query('UPDATE x SET created = 1')).rejects.not.toThrow(/Refused/);
+  });
+
+  it('allowSchemaChange lets one piece of work through, and only it (a tenant schema being provisioned)', async () => {
+    const sequelize = guarded();
+    await expect(allowSchemaChange('provision a tenant schema', () => sequelize.query('DROP SCHEMA IF EXISTS tenant_x CASCADE'))).rejects.not.toThrow(/Refused/);
+    await expect(sequelize.query('DROP SCHEMA IF EXISTS tenant_x CASCADE')).rejects.toThrow(/Refused/);
+    await expect(Promise.all([allowSchemaChange('one job', async () => undefined), sequelize.query('CREATE TABLE y (id int)')])).rejects.toThrow(/Refused/);
+    expect(() => allowSchemaChange(' ', async () => undefined)).toThrow(/reason/);
   });
 });

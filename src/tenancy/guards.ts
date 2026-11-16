@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { InternalServerErrorException } from '@nestjs/common';
 import type { Transaction } from 'sequelize';
 import type { Sequelize } from 'sequelize-typescript';
@@ -82,6 +83,18 @@ export function isSchemaChange(sql: string): boolean {
   return DDL.test(sql) && !TEMPORARY.test(sql);
 }
 
+const ALLOWED = new AsyncLocalStorage<string>();
+
+/**
+ * Runs `work` with schema changes allowed on every guarded pool, for that work only (async context): the one door for
+ * code whose job is a schema change (provisioning a tenant's schema, dropping it when its provisioning failed). `reason`
+ * names the job; everything outside `work` stays refused.
+ */
+export function allowSchemaChange<T>(reason: string, work: () => Promise<T>): Promise<T> {
+  if (!reason.trim()) throw new Error('allowSchemaChange needs a reason');
+  return ALLOWED.run(reason, work);
+}
+
 export class SchemaChangeRefused extends InternalServerErrorException {
   constructor(dbKey: string, sql: string) {
     super(`Refused a schema change on "${dbKey}": another system owns this schema (features.schema 'external'). Statement: ${sql.slice(0, 120)}`);
@@ -100,7 +113,7 @@ export function installDdlGuard(sequelize: Sequelize, dbKey: string): void {
   const query = target.query.bind(sequelize);
   target.query = (sql: unknown, options?: unknown) => {
     const text = typeof sql === 'string' ? sql : ((sql as { query?: string } | null)?.query ?? '');
-    if (isSchemaChange(text)) return Promise.reject(new SchemaChangeRefused(dbKey, text));
+    if (isSchemaChange(text) && ALLOWED.getStore() === undefined) return Promise.reject(new SchemaChangeRefused(dbKey, text));
     return query(sql, options);
   };
   target.sync = () => Promise.reject(new SchemaChangeRefused(dbKey, 'sync()'));

@@ -216,6 +216,10 @@ install-links=true
 
 After a framework change, `npm run fw:update` in the project rebuilds and reinstalls it.
 
+For Ankpal, where every checkout goes and how to run the API and the desk locally is in the Workspace section of
+[`ankpal-ops-backend/README.md`](https://github.com/Ankpal-ERP/ankpal-ops-backend#workspace-clone-and-run-everything)
+(this repo sits beside the `ankpal-erp` folder, at the commit in that repo's `.ops-framework-ref`).
+
 | Import | What it is |
 | --- | --- |
 | `@ops/framework` | everything an app uses |

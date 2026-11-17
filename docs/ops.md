@@ -241,7 +241,7 @@ protected readonly lookups = {
 - Who: any member of the company (a lookup is not the list page). A user with a grant on the resource's list is narrowed
   by its scope (a grant for some branches); `permission: '<action>'` requires that grant instead.
 - What: `?fields=` and `?search=` choose from the lookup's own `fields` / `search` (the user's "show" and "search by"
-  choices); `alias.field` is a field of an association, read through its include. A name the lookup does not list is
+  choices); `alias.field` is a field of an association, read through its include, and `alias.alias.field` one further away (a branch's `branchBillingAddress.state.name`), its include nested in the first. A name the lookup does not list is
   refused (400), never dropped. `?q=` is searched in the chosen search fields, any of them, case-insensitive, as text.
   `?ids=` reads the rows of values already chosen. `?limit=` up to `maxLimit` (default 100; 20 when not given).
 - Conditions: `?filters={"isActive":true,"branchId":[1,2]}` on the lookup's `filters` fields (a value, or a list).

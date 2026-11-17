@@ -125,31 +125,52 @@ function pick(requested: string | undefined, allowed: readonly string[], fallbac
 
 /**
  * The find of one lookup request, checked against the lookup's lists and the model: plain fields become attributes,
- * `alias.field` an include of that association with its fields; `q` is searched in the chosen search fields (any of
- * them, case-insensitive), an association's field through its include. Pure: the service adds the company and scope.
+ * `alias.field` an include of that association with its fields, `alias.alias.field` one nested in it (a branch's
+ * billing address's state name); `q` is searched in the chosen search fields (any of them, case-insensitive), an
+ * association's field through its include. Pure: the service adds the company and scope.
  */
 export function buildLookupFind(model: ModelStatic<Model>, def: LookupDef, query: LookupQueryDto): LookupFind {
   const shown = pick(query.fields, def.fields, def.defaultFields, 'Fields');
   const searched = pick(query.search, def.search, def.defaultSearch, 'Search fields');
   const own = new Set<string>(['id']);
-  const joined = new Map<string, Set<string>>();
+  /** The joins asked for, as a tree: alias -> its fields and the joins under it. */
+  const joined = new Map<string, Join>();
   const place = (name: string) => {
-    const [first, second] = name.split('.');
-    if (!second) {
-      if (!model.getAttributes()[first!]) throw new BadRequestException(`Unknown field ${name}`);
-      own.add(first!);
-      return `${model.name}.${first}`;
+    const parts = name.split('.');
+    const field = parts.pop()!;
+    if (!parts.length) {
+      if (!model.getAttributes()[field]) throw new BadRequestException(`Unknown field ${name}`);
+      own.add(field);
+      return `${model.name}.${field}`;
     }
-    const target = model.associations[first!]?.target;
-    if (!target || !target.getAttributes()[second]) throw new BadRequestException(`Unknown field ${name}`);
-    joined.set(first!, (joined.get(first!) ?? new Set(['id'])).add(second));
-    return `$${first}.${second}$`;
+    let at = joined;
+    let from: ModelStatic<Model> = model;
+    let join: Join | undefined;
+    for (const as of parts) {
+      const association = from.associations[as];
+      if (!association) throw new BadRequestException(`Unknown field ${name}`);
+      join = at.get(as) ?? { model: association.target, fields: new Set(['id']), many: association.isMultiAssociation === true, under: new Map() };
+      at.set(as, join);
+      at = join.under;
+      from = association.target;
+    }
+    if (!from.getAttributes()[field]) throw new BadRequestException(`Unknown field ${name}`);
+    join!.fields.add(field);
+    return `$${parts.join('.')}.${field}$`;
   };
-  /** A to-many association (a branch's warehouses) is read as its own query: rows stay one per record and the limit holds. */
-  const toMany = (as: string) => model.associations[as]?.isMultiAssociation === true;
+  /** A to-many association (a branch's warehouses) is read as its own query: it cannot be searched or filtered through. */
+  const throughMany = (name: string) => {
+    let from: ModelStatic<Model> = model;
+    for (const as of name.split('.').slice(0, -1)) {
+      const association = from.associations[as];
+      if (!association) return false;
+      if (association.isMultiAssociation) return true;
+      from = association.target;
+    }
+    return false;
+  };
   const searchable = (name: string) => {
-    const [first, second] = name.split('.');
-    if (second && toMany(first!)) throw new BadRequestException(`${name} lists many rows and cannot be searched or filtered`);
+    if (throughMany(name)) throw new BadRequestException(`${name} lists many rows and cannot be searched or filtered`);
     return name;
   };
   shown.forEach(place);
@@ -188,15 +209,29 @@ export function buildLookupFind(model: ModelStatic<Model>, def: LookupDef, query
     attributes: [...own],
     search: { q: text ?? '', fields: searched },
     chosen: ids.length > 0,
-    include: [...joined].map(([as, fields]): Includeable => {
-      if (!toMany(as)) return { association: as, attributes: [...fields], required: false };
-      // A separate read needs the key back to its record.
-      const foreignKey = (model.associations[as] as unknown as { foreignKey: string }).foreignKey;
-      return { association: as, attributes: [...new Set([...fields, foreignKey])], separate: true };
-    }),
+    include: includesOf(model, joined),
     where,
     order: def.order ?? [[firstOwn, 'ASC']],
     limit: ids.length ? Math.max(limit, ids.length) : limit,
     offset: query.offset ?? 0,
   };
+}
+
+/** One join of a lookup: the associated model, its fields, whether it is to-many, and the joins under it. */
+interface Join {
+  model: ModelStatic<Model>;
+  fields: Set<string>;
+  many: boolean;
+  under: Map<string, Join>;
+}
+
+/** The include of each join, its own joins nested in it; a to-many one read as its own query (with its key back). */
+function includesOf(from: ModelStatic<Model>, joins: Map<string, Join>): Includeable[] {
+  return [...joins].map(([as, join]): Includeable => {
+    const nested = join.under.size ? { include: includesOf(join.model, join.under) } : {};
+    if (!join.many) return { association: as, attributes: [...join.fields], required: false, ...nested };
+    // A separate read needs the key back to its record.
+    const foreignKey = (from.associations[as] as unknown as { foreignKey: string }).foreignKey;
+    return { association: as, attributes: [...new Set([...join.fields, foreignKey])], separate: true, ...nested };
+  });
 }

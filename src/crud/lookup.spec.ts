@@ -6,8 +6,11 @@ import { buildLookupFind, lookupParams, type LookupDef } from './lookup.js';
 class Party extends Model {}
 class Group extends Model {}
 class Phone extends Model {}
+class Region extends Model {}
 const sequelize = new Sequelize('postgres://x@localhost/x', { logging: false });
-Group.init({ name: DataTypes.STRING, code: DataTypes.STRING }, { sequelize, modelName: 'Group' });
+Region.init({ name: DataTypes.STRING }, { sequelize, modelName: 'Region' });
+Group.init({ name: DataTypes.STRING, code: DataTypes.STRING, regionId: DataTypes.INTEGER }, { sequelize, modelName: 'Group' });
+Group.belongsTo(Region, { as: 'region', foreignKey: 'regionId' });
 Party.init({ name: DataTypes.STRING, gstin: DataTypes.STRING, mobile: DataTypes.STRING, groupId: DataTypes.INTEGER, secret: DataTypes.STRING }, { sequelize, modelName: 'Party' });
 Party.belongsTo(Group, { as: 'group', foreignKey: 'groupId' });
 Phone.init({ number: DataTypes.STRING, partyId: DataTypes.INTEGER }, { sequelize, modelName: 'Phone' });
@@ -79,6 +82,15 @@ describe('lookup find', () => {
     expect(buildLookupFind(Party, many, { fields: 'name,phones.number' }).include).toEqual([{ association: 'phones', attributes: ['id', 'number', 'partyId'], separate: true }]);
     expect(() => buildLookupFind(Party, many, { q: 'x', search: 'phones.number' })).toThrow('cannot be searched or filtered');
     expect(() => buildLookupFind(Party, many, { filters: '{"phones.number":"1"}' })).toThrow('cannot be searched or filtered');
+  });
+
+  it("reads a field two associations away (a party's group's region name) nested in its include, and searches it", () => {
+    const deep: LookupDef = { fields: ['name', 'group.name', 'group.region.name'], search: ['name', 'group.region.name'] };
+    const find = buildLookupFind(Party, deep, { q: 'west', fields: 'name,group.name,group.region.name', search: 'group.region.name' });
+    expect(find.include).toEqual([{ association: 'group', attributes: ['id', 'name'], required: false, include: [{ association: 'region', attributes: ['id', 'name'], required: false }] }]);
+    expect(find.where).toEqual([{ [Op.or]: [{ '$group.region.name$': { [Op.iLike]: '%west%' } }] }]);
+    expect(() => buildLookupFind(Party, { fields: ['group.region.nope'], search: [] }, { fields: 'group.region.nope' })).toThrow('Unknown field group.region.nope');
+    expect(() => buildLookupFind(Party, { fields: ['group.nowhere.name'], search: [] }, { fields: 'group.nowhere.name' })).toThrow('Unknown field group.nowhere.name');
   });
 
   it('leaves the search to the steps when the lookup says so: its names are its own and q is not applied', () => {

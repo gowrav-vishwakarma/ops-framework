@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import { describe, expect, it } from 'vitest';
 import { Issues } from './issues.js';
-import { applyJsonColumns, checkJson, JsonField, jsonListShape, jsonMapShape } from './json-columns.js';
+import { applyJsonColumns, checkJson, JsonField, jsonListShape, jsonMapShape, mergeJson } from './json-columns.js';
 
 class Ref {
   @JsonField.number() id?: number;
@@ -130,5 +130,26 @@ describe('applyJsonColumns', () => {
     applyJsonColumns(c, { section: Section, other: Section, unsent: Section });
     expect(values).toEqual({ section: { enable: true }, other: { digits: 'x' } });
     expect(c.issues.fields).toEqual({ 'other.digits': ['digits must be a number'] });
+  });
+
+  it('with merge, a partial save changes only the keys it sends; null clears a key; a null column stays null', () => {
+    const before = { section: { enable: true, digits: 2, legacy: 'x' }, other: { enable: false, digits: 3 } };
+    const { c, values } = target({ section: { digits: 4, fresh: 1 }, other: null }, before);
+    applyJsonColumns(c, { section: Section, other: Section }, 'Row', { merge: true });
+    // The unknown `fresh` is still dropped; the stored keys not sent (an unknown one too) stay.
+    expect(values).toEqual({ section: { enable: true, digits: 4, legacy: 'x' }, other: null });
+    const cleared = target({ section: { digits: null } }, before);
+    applyJsonColumns(cleared.c, { section: Section }, 'Row', { merge: true });
+    expect(cleared.values.section).toEqual({ enable: true, digits: null, legacy: 'x' });
+  });
+});
+
+describe('mergeJson', () => {
+  it('merges objects at every depth; lists and values replace; nothing stored takes what was sent', () => {
+    const stored = { a: { b: 1, c: { d: 1, e: 2 } }, list: [1, 2], v: 1, o: 5 };
+    expect(mergeJson(stored, { a: { c: { e: 3 } }, list: [3], o: { x: 1 } })).toEqual({ a: { b: 1, c: { d: 1, e: 3 } }, list: [3], v: 1, o: { x: 1 } });
+    expect(mergeJson(undefined, { a: 1 })).toEqual({ a: 1 });
+    expect(mergeJson(null, { a: 1 })).toEqual({ a: 1 });
+    expect(stored.a.c).toEqual({ d: 1, e: 2 });
   });
 });

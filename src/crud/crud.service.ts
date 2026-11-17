@@ -156,6 +156,11 @@ export abstract class CrudService<
    * the check steps, and stores the checked value.
    */
   protected readonly jsonColumns: JsonColumns = {};
+  /**
+   * Merge a sent JSON column into the stored value instead of replacing it: a partial save changes only the
+   * keys it sends (at every depth), `null` clears a key, a list is replaced whole. Default off (replace).
+   */
+  protected readonly jsonMerge: boolean = false;
 
   private ops = new OpsRegistry();
   private frameworkOptions: FrameworkOptions | undefined;
@@ -475,7 +480,7 @@ export abstract class CrudService<
   // ---- writes ---------------------------------------------------------------------------
 
   private writeChecks(op: string, label: string): BuiltInChecks<M> {
-    return { label, limits: limitsFor(op, this.limits), guards: this.guards, refs: true, json: this.jsonColumns };
+    return { label, limits: limitsFor(op, this.limits), guards: this.guards, refs: true, json: this.jsonColumns, jsonMerge: this.jsonMerge };
   }
 
   async create(ctx: ReqCtx<U>, dto: TCreate, outer?: Transaction, confirmed = false): Promise<unknown> {

@@ -28,13 +28,15 @@ export interface BuiltInChecks<M extends Model> {
   refs?: boolean;
   /** JSON columns checked against their shapes (creates and updates): see `json-columns.ts`. */
   json?: JsonColumns;
+  /** Merge each sent JSON column into the stored value (partial saves) rather than replace it. */
+  jsonMerge?: boolean;
 }
 
 /** Blocks when a project guard refuses the record, or it is above the caller's limit. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function runBuiltInChecks<M extends Model>(c: OpContext<M, Attrs, any, any>, spec: BuiltInChecks<M>): Promise<void> {
   // First: guards, limits and the check steps then see the checked JSON values.
-  if (spec.json && Object.keys(spec.json).length) applyJsonColumns(c as never, spec.json);
+  if (spec.json && Object.keys(spec.json).length) applyJsonColumns(c as never, spec.json, undefined, { merge: spec.jsonMerge });
   for (const guard of spec.guards ?? []) {
     const prepared = await preparedFor(guard, c.ctx, (token) => c.get(token as never), c.t);
     const reason = await guard.reason({ op: c.op, row: c.row, before: c.before, ctx: c.ctx, prepared, can: async (code) => (await c.can(code)) !== null });

@@ -13,7 +13,9 @@ import type { Issues } from './issues.js';
  * - a key the shape does not declare is dropped and logged once (so the shape can be completed), unless
  *   the client sent it back unchanged from the stored value (a form that loads the column and posts it
  *   whole): then it is kept, so a missing schema entry never erases stored data;
- * - the stored value becomes the checked value: the column is replaced, as a plain JSON update does.
+ * - the stored value becomes the checked value: the column is replaced, as a plain JSON update does; or,
+ *   with `merge` (`jsonMerge` of a CRUD service), the checked value is merged into the stored one (`mergeJson`):
+ *   a partial save changes only the keys it sends.
  */
 
 type Primitive = 'text' | 'number' | 'boolean';
@@ -266,6 +268,18 @@ function checkShape(shape: Type<object>, input: unknown, options: { path?: strin
   return { value, problems, dropped, kept };
 }
 
+/**
+ * `sent` merged into `stored`, for partial saves: at every depth where both are objects, the keys sent replace
+ * theirs (an explicit `null` clears a key's value) and the keys not sent stay; anything else (a list, a value, an
+ * object over a value) replaces what was stored as a whole.
+ */
+export function mergeJson(stored: unknown, sent: unknown): unknown {
+  if (!isPlainObject(stored) || !isPlainObject(sent)) return structuredClone(sent);
+  const out: Record<string, unknown> = structuredClone(stored);
+  for (const [key, value] of Object.entries(sent)) if (value !== undefined) out[key] = mergeJson(stored[key], value);
+  return out;
+}
+
 const logger = new Logger('JsonColumns');
 const logged = new Set<string>();
 
@@ -293,11 +307,11 @@ export interface JsonColumnsTarget {
 /**
  * Check the JSON columns a write sends (`c.dto`) against their shapes: problems become field errors
  * (`itemSettings.qtyDecimal`), unknown keys are dropped (or kept when sent back unchanged) and logged
- * once, and the row takes the checked value. Columns the write does not send are left alone. CRUD
- * services do it for their `jsonColumns` before the check steps; a step that saves by other means
- * calls it itself.
+ * once, and the row takes the checked value (with `merge`, merged into the stored one: a partial save keeps
+ * the keys it does not send). Columns the write does not send are left alone. CRUD services do it for their
+ * `jsonColumns` before the check steps; a step that saves by other means calls it itself.
  */
-export function applyJsonColumns(c: JsonColumnsTarget, columns: JsonColumns, scope = c.row.constructor.name): void {
+export function applyJsonColumns(c: JsonColumnsTarget, columns: JsonColumns, scope = c.row.constructor.name, options: { merge?: boolean } = {}): void {
   const dto = (c.dto ?? {}) as Record<string, unknown>;
   for (const [column, shape] of Object.entries(columns)) {
     if (!(column in dto) || dto[column] === undefined) continue;
@@ -305,6 +319,6 @@ export function applyJsonColumns(c: JsonColumnsTarget, columns: JsonColumns, sco
     for (const problem of result.problems) c.issues.field(problem.path, problem.message);
     logUnknown(scope, result.dropped, 'dropped');
     logUnknown(scope, result.kept, 'kept (sent back unchanged)');
-    c.row.set(column, result.value);
+    c.row.set(column, options.merge && result.value !== null ? mergeJson(c.before?.[column], result.value) : result.value);
   }
 }

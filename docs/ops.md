@@ -513,7 +513,10 @@ one of them checks it before guards, limits and check steps:
   sent it back unchanged from the stored value (forms load a column and post it whole): then it stays,
   so an incomplete shape never erases stored data;
 - the row takes the checked value: the column is replaced (a plain JSON update), keys the client left
-  out are not merged back.
+  out are not merged back; or, with `jsonMerge = true` on the service, the checked value is merged into
+  the stored one (`mergeJson`): a partial save changes only the keys it sends at every depth, an explicit
+  `null` clears a key, a list or a plain value replaces what was stored, a `null` column clears the column.
+  Unknown keys are still dropped from what is sent; stored ones the save does not touch stay.
 
 Columns a write does not send are left alone. A save that does not go through the CRUD service (a
 `500-execute.ts`, a service writing the column) calls `applyJsonColumns(c, { column: Shape })` from a

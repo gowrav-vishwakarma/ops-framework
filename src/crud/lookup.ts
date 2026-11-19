@@ -50,6 +50,8 @@ export interface LookupDef {
 export type LookupParamType = 'text' | 'number' | 'boolean' | 'date' | 'ids';
 
 export class LookupQueryDto {
+  /** The lookup's own named parameters ride in the same query and are checked by `lookupParams` (unknown refused). */
+  static readonly namedParams = true;
   /** The text typed. */
   @IsOptional() @IsString() @MaxLength(200) q?: string;
   /** Comma-separated fields to show (from the lookup's `fields`). */

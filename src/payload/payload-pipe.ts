@@ -27,6 +27,8 @@ export class PayloadPipe implements PipeTransform {
       return value;
     }
     if ((type !== 'body' && type !== 'query') || data || !metatype || PLAIN.includes(metatype)) return value;
-    return checkPayload(metatype as Type<object>, value ?? {}, { endpoint: `${type} ${metatype.name}`, mode: this.mode, refuse: this.refuse });
+    // A query class whose other keys are named parameters checked elsewhere (a lookup's): those are not unknown fields.
+    const mode = (metatype as { namedParams?: boolean }).namedParams ? 'off' : this.mode;
+    return checkPayload(metatype as Type<object>, value ?? {}, { endpoint: `${type} ${metatype.name}`, mode, refuse: this.refuse });
   }
 }

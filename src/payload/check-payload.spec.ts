@@ -89,6 +89,15 @@ describe('PayloadPipe: controller bodies and queries typed with a class', () => 
     expect(pipe.transform('true', { type: 'query', metatype: String, data: 'confirm' })).toBe('true');
   });
 
+  it('a query class with named parameters checked elsewhere (a lookup) reports nothing for them', () => {
+    class Lookup {
+      static readonly namedParams = true;
+      @IsOptional() @IsString() q?: string;
+    }
+    expect(new PayloadPipe('error').transform({ q: 'a', partyId: '5' }, { type: 'query', metatype: Lookup })).toEqual({ q: 'a' });
+    expect(payloadWarnings()).toEqual([]);
+  });
+
   it('warn: reports under the class name', () => {
     new PayloadPipe('warn').transform({ ...good, extra: 1 }, { type: 'body', metatype: Invoice });
     expect(payloadWarnings()).toEqual([{ endpoint: 'body Invoice', field: 'extra', count: 1 }]);

@@ -136,6 +136,18 @@ function crudRoutes(kind: CrudRouteKind, method: ContractRoute['method'], path: 
   }
 }
 
+const NUMERIC_TEXT: SchemaObject = { type: 'string', pattern: '^-?\\d+(\\.\\d+)?$' };
+const PRIMITIVE: Record<string, SchemaObject> = { text: { type: 'string' }, number: { type: 'number' }, boolean: { type: 'boolean' } };
+
+/** The framework's own validators (JSON column shapes, `JsonField`). */
+function frameworkValidator(name: string): SchemaObject | undefined {
+  if (name === 'jsonNumber') return { type: 'number' };
+  if (name === 'jsonNumeric') return { anyOf: [{ type: 'number' }, NUMERIC_TEXT] };
+  const list = /^jsonListOf(.+)$/.exec(name);
+  if (list) return { type: 'array', items: PRIMITIVE[list[1]!] ?? {} };
+  return undefined;
+}
+
 /** `{ enum }` of the values, typed when they all share one JSON type. */
 function enumOf(values: unknown[]): SchemaObject {
   const types = new Set(values.map((v) => (v === null ? 'null' : Number.isInteger(v) ? 'integer' : typeof v === 'number' ? 'number' : typeof v)));
@@ -165,7 +177,7 @@ export function openApi(routes: ContractRoute[], options: OpenApiOptions) {
       [IS_NOT_IN]: (meta) => ({ not: enumOf(meta.constraints[0] as unknown[]) }),
       [ValidationTypes.CUSTOM_VALIDATION]: (meta) => {
         const name = (meta as { name?: string }).name ?? meta.constraintCls?.name ?? 'custom';
-        const schema = options.customValidators?.[name];
+        const schema = options.customValidators?.[name] ?? frameworkValidator(name);
         if (!schema) unconverted.add(name);
         return schema ?? {};
       },

@@ -712,6 +712,10 @@ export abstract class CrudService<
   private async performMany(ctx: ReqCtx<U>, action: EntityAction<M, U>, ids: number[], input: Record<string, unknown>, outer?: Transaction) {
     let results: unknown[] = [];
     await this.inTx(outer, async (t) => {
+      // `each`: every record runs one of the row actions, as if called on it alone (its input is the row action's: none).
+      const each = action.each ? this.eachAction(action, await this.actionInput(action, input, new Issues())) : null;
+      const perRecord = each ?? action;
+      const rowInput = each ? (input.confirm === true ? { confirm: true } : {}) : input;
       const rows = await this.model.findAll({
         where: { [Op.and]: [this.scopeWhere(ctx), { id: { [Op.in]: ids } }] } as WhereOptions,
         order: [['id', 'ASC']],
@@ -721,12 +725,12 @@ export abstract class CrudService<
       });
       if (rows.length !== ids.length) throw new NotFoundException(`${this.label} not found`);
 
-      const contexts = rows.map((row) => this.rowContext<unknown>(action.name, ctx, t, row, { ...row.get({ plain: true }) } as Attrs, input, rows));
+      const contexts = rows.map((row) => this.rowContext<unknown>(perRecord.name, ctx, t, row, { ...row.get({ plain: true }) } as Attrs, rowInput, rows));
       const all = new Issues();
       for (const c of contexts) {
-        c.dto = await this.actionInput(action, input, c.issues);
-        if (this.startState(action, c.row, c.issues).failed === false) {
-          await runBuiltInChecks(c, this.actionChecks(action));
+        c.dto = await this.actionInput(perRecord, rowInput, c.issues);
+        if (this.startState(perRecord, c.row, c.issues).failed === false) {
+          await runBuiltInChecks(c, this.actionChecks(perRecord));
           await this.runPhase(c, 'check');
         }
         const label = String(c.row.get('name') ?? c.row.get('code') ?? `#${c.row.get('id')}`);
@@ -739,16 +743,24 @@ export abstract class CrudService<
       all.throwIfUnconfirmed(input.confirm === true);
 
       results = [];
+      const audit = { ...this.snapshot(input), bulk: ids.length, ...(each ? { via: action.name } : {}) };
       for (const c of contexts) {
         await this.runPhase(c, 'before');
-        await this.runMain(c, async () => action.run?.(c));
+        await this.runMain(c, async () => perRecord.run?.(c));
         await this.runPhase(c, 'after');
-        await this.afterWrite(c, `action:${action.name}`);
-        await this.record(t, ctx, c.row.get('id') as number, `action:${action.name}`, { ...this.snapshot(input), bulk: ids.length });
+        await this.afterWrite(c, `action:${perRecord.name}`);
+        await this.record(t, ctx, c.row.get('id') as number, `action:${perRecord.name}`, audit);
         if (c.result !== undefined) results.push(c.result);
       }
     });
     return results.length ? results : { ids, done: ids.length };
+  }
+
+  /** The row action a bulk `each` action runs for this input. */
+  private eachAction(action: EntityAction<M, U>, input: unknown): EntityAction<M, U> {
+    const target = this.actionDef(action.each!(input as object));
+    if ((target.kind ?? 'row') !== 'row') throw new Error(`[ops] ${this.resource}.${action.name}: each names ${target.name}, which is not a row action`);
+    return target;
   }
 
   private async performCollection(ctx: ReqCtx<U>, action: EntityAction<M, U>, input: Record<string, unknown>, outer?: Transaction) {

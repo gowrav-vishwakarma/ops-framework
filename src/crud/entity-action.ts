@@ -64,6 +64,14 @@ export interface EntityAction<M extends Model = Model, U extends Actor = AuthUse
   input?: Type<object>;
   /** The action's main effect, between the `before` and `after` steps. Optional: steps may do all the work. */
   run?(c: OpContext<M, Attrs, unknown, U>): Promise<void>;
+  /**
+   * A `bulk` action that applies one of the entity's `row` actions to each chosen record: the name of that action for
+   * the validated input (`{ status: 'inactive' }` → `deactivate`). Each record then goes exactly as
+   * `POST /:id/actions/<that action>` would (its start state, limits, guards, `ops/<that action>/` steps and `run`),
+   * all records checked first, and is audited under that action's name with `bulk` and `via` (this action). The bulk
+   * action's own permission is what the caller needs. Leave `run` and `ops/<name>/` out.
+   */
+  each?(input: object): string;
   /** Main effect of a `collection` action. */
   runCollection?(c: CollectionContext<Attrs, unknown, U>): Promise<void>;
   /** What `run` does, in a few words, for the flow document: "status -> inactive". */

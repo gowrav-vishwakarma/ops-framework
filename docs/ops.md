@@ -109,6 +109,12 @@ export const branchActions: EntityAction<Branch>[] = [
 - `from` is the row state it starts from. It also enables the button in the UI.
 - `effect` is the one line the flow doc prints for the main change.
 - `run` is optional. `statusActions` gives deactivate and activate a `run` that sets `status`.
+- `statusActions({ noun, bulk: true })` adds a bulk action (`bulk-status`, or the name given) that sets the status of
+  many records: `POST /actions/bulk-status` with `{ ids, status }`, `status` limited to the column's own values (no
+  conversion: a boolean column takes `true` / `false`). Each record runs `activate` or `deactivate` exactly as alone
+  (start state, limits, guards, their `ops/` steps), all checked first. `bulkStatusAction({ noun, field, values })`
+  without `rowAction` sets the column itself, for an entity whose status is only in its form; its checks and side
+  effects go in `ops/<name>/` (re-export the save / update steps it shares: `export { default } from '../save/570-....js'`).
 - `readOnly: true` marks an action that only reads (a report, print or label data): a row action reads its row without
   a lock, and neither kind writes an audit row or runs after-write work. It answers `c.result`.
 
@@ -189,6 +195,10 @@ Declared in `<module>.actions.ts`. Each action is a permission: `branch.deactiva
 
 - **`row`** (default) — `POST /:id/actions/:name`. Steps in `ops/<name>/` around the main change.
 - **`bulk`** — `POST /actions/:name` with `{ ids }`. Every record is checked first and blockers come back per record. Then before, the main change, and after run per record, in one transaction.
+  With `each(input)` naming a `row` action, every record runs that row action instead (its start state, limits,
+  guards, `ops/<row action>/` steps and `run`; its own input, so a status action takes none), audited under the row
+  action with `{ bulk, via }`. One rule, one place: the single-record and the bulk change cannot drift. The caller
+  needs the bulk action's permission.
 - **`collection`** — `POST /actions/:name`, no record. Use `collectionStep`, and `runCollection` or `collectionExecute`. Set `c.result` for the response.
 
 `ops/<name>/dto.ts` (see *The payload*), or `input: SomeDto` in the actions file, validates the body with class-validator before the steps. An input that fails (or a required `inputs` field left empty) is refused with 400 field errors (malformed against the contract) before the check steps run, so steps may rely on `c.dto` having its fields and types (as a create's DTO, validated before any step). `inputs` is the separate list the UI uses to draw the dialog.

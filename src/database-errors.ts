@@ -1,8 +1,9 @@
-import { ArgumentsHost, Catch, ConflictException, HttpException, Inject, Logger, Optional, ServiceUnavailableException, type ExceptionFilter } from '@nestjs/common';
+import { ArgumentsHost, Catch, ConflictException, HttpException, Inject, Logger, Optional, type ExceptionFilter } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { Response } from 'express';
 import { BaseError, DatabaseError, ForeignKeyConstraintError, UniqueConstraintError, ValidationError } from 'sequelize';
 import { fieldErrors, type FieldErrors } from './errors.js';
+import { ClientGone, currentWork, RequestTimedOut } from './request/request-work.js';
 import { FRAMEWORK_OPTIONS, type FrameworkOptions, type UniqueAnswer } from './options.js';
 
 /** `accountGroupId` → `Account group`. */
@@ -68,8 +69,9 @@ export function databaseErrorAnswer(error: unknown, unique: readonly UniqueAnswe
         return fieldErrors({ [field]: [field === 'Error' ? 'A value is not in the right format' : `${label(field)} is not in the right format`] });
       case '23514':
         return fieldErrors({ Error: ['A value is not allowed here'] });
+      // Cancelled: the statement timeout (the slot's database net) or the request's own cancel.
       case '57014':
-        return new ServiceUnavailableException('This took too long; narrow it down and try again');
+        return new RequestTimedOut();
       case '40001':
       case '40P01':
         return new ConflictException('Someone else changed this at the same time; try again');
@@ -81,7 +83,8 @@ export function databaseErrorAnswer(error: unknown, unique: readonly UniqueAnswe
 /**
  * Every answer is either an `HttpException` as thrown, a database refusal mapped by
  * `databaseErrorAnswer`, or a plain 500 with a reference: internals (SQL, stack, messages) go to the
- * log under that reference, never to the client.
+ * log under that reference, never to the client. A request that was stopped (its slot ran out) answers why it
+ * stopped, whatever the stop broke on the way (a cancelled query, a refused one); one whose client left answers nobody.
  */
 @Catch()
 export class ErrorAnswerFilter implements ExceptionFilter {
@@ -95,7 +98,9 @@ export class ErrorAnswerFilter implements ExceptionFilter {
   catch(error: unknown, host: ArgumentsHost): void {
     const res = host.switchToHttp().getResponse<Response>();
     if (res.headersSent) return;
-    const known = error instanceof HttpException ? error : databaseErrorAnswer(error, this.unique);
+    const stopped = currentWork()?.signal;
+    if (stopped?.aborted && stopped.reason instanceof ClientGone) return;
+    const known = stopped?.aborted && stopped.reason instanceof HttpException ? stopped.reason : error instanceof HttpException ? error : databaseErrorAnswer(error, this.unique);
     if (known) {
       if (!(error instanceof HttpException)) this.logger.warn(`${(error as Error).name}: ${(error as Error).message}`);
       res.status(known.getStatus()).json(known.getResponse());

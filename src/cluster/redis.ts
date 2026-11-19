@@ -20,6 +20,14 @@ export function quietRedisErrors(client: Redis, name: string, logger = new Logge
   return client;
 }
 
+/**
+ * A Redis connection that fails fast while Redis is down (no offline queue, one retry), for checks a request must not
+ * wait on (idempotency keys): the caller goes on without them.
+ */
+export function failFastRedis(url: string, name: string): Redis {
+  return quietRedisErrors(new Redis(url, { connectionName: `ops-${name}`, maxRetriesPerRequest: 1, enableOfflineQueue: false, lazyConnect: false }), `ops-${name}`);
+}
+
 /** A Redis connection for the framework. Blocking reads and subscriptions each need their own. */
 export function redisConnection(url: string, name: string): Redis {
   return quietRedisErrors(new Redis(url, { connectionName: `ops-${name}`, maxRetriesPerRequest: null, enableReadyCheck: true, lazyConnect: false }), `ops-${name}`);

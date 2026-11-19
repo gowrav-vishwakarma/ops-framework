@@ -3,7 +3,9 @@ import type { Grant } from '../acl/acl.service.js';
 import type { ReqCtx } from '../auth/auth-user.js';
 import { AdminRoutes, Ctx, RequirePermission } from '../auth/decorators.js';
 import { ListQueryDto } from './list-query.dto.js';
-import { CRUD_ROUTE, PAYLOAD_FALLBACK } from '../payload/route-meta.js';
+import { CRUD_ROUTE, PAYLOAD_FALLBACK, ROUTE_WORK } from '../payload/route-meta.js';
+import type { WorkDeclaration } from '../request/request-work.js';
+import type { WorkResolver } from '../request/slot.js';
 import { LookupQueryDto } from './lookup.js';
 
 export interface CrudRoutes<S> {
@@ -168,10 +170,23 @@ export function crudController<S extends object>(
   Reflect.defineMetadata(PAYLOAD_FALLBACK, options.create, proto, 'create');
   Reflect.defineMetadata(PAYLOAD_FALLBACK, options.update, proto, 'update');
   for (const kind of ['create', 'update', 'list', 'act', 'actAll', 'view', 'lookup'] as const) Reflect.defineMetadata(CRUD_ROUTE, kind, proto, kind);
+  // What each route does (request-work.ts): reads stop when their client leaves, writes never; an action says for itself.
+  for (const read of ['actions', 'lookup', 'view', 'list', 'history', 'get'] as const) Reflect.defineMetadata(ROUTE_WORK, READS, proto[read]);
+  for (const write of ['create', 'update', 'remove'] as const) Reflect.defineMetadata(ROUTE_WORK, WRITES, proto[write]);
+  const actionWork: WorkResolver = (req, get) => actionDeclaration((get(options.service) as unknown as AnyService).actionDef(req.params?.name ?? '') as EntityActionLike);
+  for (const act of ['act', 'actAll'] as const) Reflect.defineMetadata(ROUTE_WORK, actionWork, proto[act]);
 
   if (options.plane === 'control') AdminRoutes()(CrudBase);
   return CrudBase as unknown as Type<CrudRoutes<S>>;
 }
+
+const READS: WorkDeclaration = { readOnly: true };
+const WRITES: WorkDeclaration = { readOnly: false };
+
+type EntityActionLike = { readOnly?: boolean; slot?: WorkDeclaration['slot'] };
+
+/** An action's route: a write unless it is `readOnly`, in the action's slot. */
+const actionDeclaration = (action: EntityActionLike): WorkDeclaration => ({ readOnly: action.readOnly === true, ...(action.slot ? { slot: action.slot } : {}) });
 
 interface AnyService {
   lookup(ctx: ReqCtx, name: string, query: LookupQueryDto, raw?: Record<string, unknown>): Promise<unknown>;
@@ -213,6 +228,7 @@ export function lookupController<S extends object>(options: { service: Type<S>; 
     }
   }
   Reflect.defineMetadata('design:paramtypes', [Object, String, LookupQueryDto, Object], LookupBase.prototype, 'lookup');
+  Reflect.defineMetadata(ROUTE_WORK, READS, LookupBase.prototype.lookup);
   if (options.plane === 'control') AdminRoutes()(LookupBase);
   return LookupBase as unknown as Type<LookupRoutes<S>>;
 }

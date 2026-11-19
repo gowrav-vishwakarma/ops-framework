@@ -3,6 +3,7 @@ import type { Type } from '@nestjs/common';
 import type { Actor, AuthUser, ReqCtx } from '../auth/auth-user.js';
 import type { LimitDef } from '../acl/limits.js';
 import type { Attrs, CollectionContext, OpContext } from './op-context.js';
+import type { SlotName } from '../request/request-work.js';
 
 /** An extra input an action asks for, such as a reason. The UI renders it in the action dialog. */
 export interface ActionInput {
@@ -81,6 +82,11 @@ export interface EntityAction<M extends Model = Model, U extends Actor = AuthUse
    * or audit row follows (nothing changed). Its answer is `c.result`.
    */
   readOnly?: boolean;
+  /**
+   * How long the action may run (`request/request-work.ts`): `fast` (default), `medium` for a report, `slow` for an
+   * export, a closing, a recalculation or an import. Over it the request stops (a write is rolled back) with 503.
+   */
+  slot?: SlotName;
 }
 
 /** What the API tells the UI about an action. */

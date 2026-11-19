@@ -6,7 +6,9 @@ import { getMetadataStorage, IS_IN, IS_NOT_IN, ValidationTypes } from 'class-val
 import { validationMetadatasToSchemas } from 'class-validator-jsonschema';
 import type { SchemaObject } from 'openapi3-ts';
 import { NoPayload } from './check-payload.js';
-import { CRUD_ROUTE, PAYLOAD_FALLBACK, type CrudRouteKind } from './route-meta.js';
+import { CRUD_ROUTE, PAYLOAD_FALLBACK, ROUTE_WORK, type CrudRouteKind } from './route-meta.js';
+import type { SlotName, WorkDeclaration } from '../request/request-work.js';
+import { IDEMPOTENCY_HEADER } from '../request/idempotency.interceptor.js';
 
 /** One endpoint of the app as the contract lists it. */
 export interface ContractRoute {
@@ -19,6 +21,10 @@ export interface ContractRoute {
   query?: Type<object>;
   /** Why the endpoint is not held to a class yet (the strictness gap): absent when it is, or takes nothing. */
   gap?: string;
+  /** Only reads (stops when its client leaves; takes no idempotency key). */
+  readOnly: boolean;
+  /** Its time slot (`@Slot`, an action's `slot`). */
+  slot: SlotName;
 }
 
 const METHODS: Partial<Record<RequestMethod, ContractRoute['method']>> = {
@@ -38,7 +44,7 @@ interface CrudService {
   payloadContract(): {
     label: string;
     dtos: Record<string, Type<object>>;
-    actions: Array<{ name: string; label: string; kind: 'row' | 'bulk' | 'collection'; input?: Type<object> }>;
+    actions: Array<{ name: string; label: string; kind: 'row' | 'bulk' | 'collection'; input?: Type<object>; readOnly: boolean; slot: SlotName }>;
     lists: string[];
     views: string[];
     lookups: string[];
@@ -87,11 +93,18 @@ export function collectRoutes(app: INestApplication, prefix = 'api', skip: (path
   return routes.sort((a, b) => a.path.localeCompare(b.path) || a.method.localeCompare(b.method));
 }
 
+/** What a hand-written route declares with `@Slot` (its own over its controller's); a GET reads, anything else writes. */
+function declaredWork(method: ContractRoute['method'], controller: Type<object>, handler: object): Pick<ContractRoute, 'readOnly' | 'slot'> {
+  const own = Reflect.getMetadata(ROUTE_WORK, handler) as WorkDeclaration | undefined;
+  const declared = { ...(Reflect.getMetadata(ROUTE_WORK, controller) as WorkDeclaration | undefined), ...(typeof own === 'object' ? own : {}) };
+  return { readOnly: declared.readOnly ?? method === 'get', slot: declared.slot ?? 'fast' };
+}
+
 /** A hand-written route: its `@Body()` and `@Query()` classes; a body typed `Object` or picked by field is a gap. */
 function plainRoute(method: ContractRoute['method'], path: string, operation: string, controller: Type<object>, name: string): ContractRoute {
   const args = (Reflect.getMetadata(ROUTE_ARGS_METADATA, controller, name) ?? {}) as Record<string, { index: number; data?: unknown; pipes?: unknown[] }>;
   const types = (Reflect.getMetadata('design:paramtypes', controller.prototype, name) ?? []) as unknown[];
-  const route: ContractRoute = { method, path, operation };
+  const route: ContractRoute = { method, path, operation, ...declaredWork(method, controller, (controller.prototype as Record<string, object>)[name]!) };
   for (const [key, arg] of Object.entries(args)) {
     const kind = Number(key.split(':')[0]);
     const type = types[arg.index];
@@ -114,11 +127,11 @@ function crudRoutes(kind: CrudRouteKind, method: ContractRoute['method'], path: 
     case 'create':
     case 'update': {
       const body = contract.dtos[kind] ?? contract.dtos.save ?? (Reflect.getMetadata(PAYLOAD_FALLBACK, proto, name) as Type<object> | undefined);
-      return [{ method, path, operation: `${label} ${kind}`, ...(body ? { body } : { gap: 'no payload class' }) }];
+      return [{ method, path, operation: `${label} ${kind}`, readOnly: false, slot: 'fast', ...(body ? { body } : { gap: 'no payload class' }) }];
     }
     case 'list': {
       const types = (Reflect.getMetadata('design:paramtypes', proto, name) ?? []) as Array<Type<object>>;
-      return [{ method, path, operation: `${label} list${contract.lists.length ? ` (views: ${contract.lists.join(', ')})` : ''}`, query: contract.dtos.list ?? types[1] }];
+      return [{ method, path, operation: `${label} list${contract.lists.length ? ` (views: ${contract.lists.join(', ')})` : ''}`, readOnly: true, slot: 'fast', query: contract.dtos.list ?? types[1] }];
     }
     case 'act':
     case 'actAll': {
@@ -127,15 +140,26 @@ function crudRoutes(kind: CrudRouteKind, method: ContractRoute['method'], path: 
         method,
         path: path.replace('{name}', a.name),
         operation: `${label} action ${a.name} (${a.label})`,
+        readOnly: a.readOnly,
+        slot: a.slot,
         ...(a.input === NoPayload ? {} : a.input ? { body: a.input } : { gap: 'action without a payload class (dto.ts, or input: NoPayload when it takes nothing)' }),
       }));
     }
     case 'view':
-      return contract.views.map((v) => ({ method, path: path.replace('{name}', v), operation: `${label} view ${v}` }));
+      return contract.views.map((v) => ({ method, path: path.replace('{name}', v), operation: `${label} view ${v}`, readOnly: true, slot: 'fast' as const }));
     case 'lookup':
-      return contract.lookups.map((l) => ({ method, path: path.replace('{name}', l), operation: `${label} lookup ${l}` }));
+      return contract.lookups.map((l) => ({ method, path: path.replace('{name}', l), operation: `${label} lookup ${l}`, readOnly: true, slot: 'fast' as const }));
   }
 }
+
+/** The optional idempotency key of every write (`request/idempotency.interceptor.ts`). */
+const IDEMPOTENCY_KEY = {
+  name: IDEMPOTENCY_HEADER,
+  in: 'header',
+  required: false,
+  description: 'A UUID per submitted save, the same on its retries: the save runs once; a retry answers its answer (Idempotent-Replayed: true), 409 save_in_progress while it runs, 422 idempotency_key_reused for another body.',
+  schema: { type: 'string', format: 'uuid' },
+};
 
 const NUMERIC_TEXT: SchemaObject = { type: 'string', pattern: '^-?\\d+(\\.\\d+)?$' };
 const PRIMITIVE: Record<string, SchemaObject> = { text: { type: 'string' }, number: { type: 'number' }, boolean: { type: 'boolean' } };
@@ -189,11 +213,14 @@ export function openApi(routes: ContractRoute[], options: OpenApiOptions) {
   for (const route of routes) {
     const params = [...route.path.matchAll(/\{([^}]+)\}/g)].map((m) => ({ name: m[1], in: 'path', required: true, schema: { type: m[1] === 'id' ? 'integer' : 'string' } }));
     const query = route.query ? Object.entries((schemas[route.query.name] as { properties?: Record<string, object> } | undefined)?.properties ?? {}).map(([name, schema]) => ({ name, in: 'query', schema })) : [];
+    // A write takes an idempotency key (a retry of the same save answers the first one's answer).
+    const key = route.readOnly ? [] : [{ $ref: '#/components/parameters/IdempotencyKey' }];
     (paths[route.path] ??= {})[route.method] = {
       operationId: route.operation,
-      ...(params.length || query.length ? { parameters: [...params, ...query] } : {}),
+      ...(params.length || query.length || key.length ? { parameters: [...params, ...query, ...key] } : {}),
       ...(route.body ? { requestBody: { required: true, content: { 'application/json': { schema: ref(route.body) } } } } : {}),
       ...(route.gap ? { 'x-payload-gap': route.gap } : {}),
+      ...(route.slot !== 'fast' ? { 'x-slot': route.slot } : {}),
       responses: { default: { description: 'See the operation' } },
     };
   }
@@ -203,7 +230,7 @@ export function openApi(routes: ContractRoute[], options: OpenApiOptions) {
   for (const target of targets) if (typeof target === 'function') byName.set(target.name, (byName.get(target.name) ?? 0) + 1);
   const clashes = [...byName].filter(([, count]) => count > 1).map(([name]) => name).sort();
   return {
-    document: { openapi: '3.1.0', info: { title: options.title, version: options.version }, paths, components: { schemas } },
+    document: { openapi: '3.1.0', info: { title: options.title, version: options.version }, paths, components: { schemas, parameters: { IdempotencyKey: IDEMPOTENCY_KEY } } },
     gaps: routes.filter((r) => r.gap).map((r) => ({ method: r.method.toUpperCase(), path: r.path, operation: r.operation, gap: r.gap! })),
     clashes,
     unconverted: [...unconverted].sort(),

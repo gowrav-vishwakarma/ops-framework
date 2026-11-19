@@ -1,5 +1,5 @@
 import { type DynamicModule, Global, type MiddlewareConsumer, Module, type NestModule, type InjectionToken, type ModuleMetadata, type OptionalFactoryDependency, type Provider, type Type } from '@nestjs/common';
-import { APP_FILTER, APP_GUARD, ApplicationConfig, DiscoveryModule } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR, ApplicationConfig, DiscoveryModule } from '@nestjs/core';
 import { CompanyInputPipe } from './tenancy/company-input.js';
 import { ErrorAnswerFilter } from './database-errors.js';
 import { JwtService } from '@nestjs/jwt';
@@ -27,6 +27,11 @@ import { TableAuditSink } from './audit/table-audit.sink.js';
 import { JwtAuthGuard } from './auth/jwt-auth.guard.js';
 import { ClusterBus, LocalBus } from './cluster/cluster-bus.js';
 import { RedisBus } from './cluster/redis-bus.js';
+import { failFastRedis } from './cluster/redis.js';
+import { IDEMPOTENCY_STORE, IdempotencyInterceptor } from './request/idempotency.interceptor.js';
+import { IdempotencyStore } from './request/idempotency-store.js';
+import { newRequestId, startRequestWork } from './request/request-work.js';
+import { RequestWorkInterceptor } from './request/request-work.interceptor.js';
 import {
   ACL_SOURCE,
   ADMIN_ACL_SOURCE,
@@ -260,15 +265,24 @@ export class FrameworkModule implements NestModule {
       { provide: APP_GUARD, useExisting: JwtAuthGuard },
       { provide: APP_GUARD, useExisting: TenantContextGuard },
       { provide: APP_GUARD, useExisting: PermissionGuard },
+      // Each request's slot and kind (read / write) once its route is known, then idempotent saves (in this order).
+      {
+        provide: IDEMPOTENCY_STORE,
+        inject: [FRAMEWORK_OPTIONS],
+        useFactory: (framework: FrameworkOptions) => (framework.idempotency?.redis ? new IdempotencyStore(failFastRedis(framework.idempotency.redis.url, 'idempotency'), framework.idempotency.ttlMs) : null),
+      },
+      { provide: APP_INTERCEPTOR, useClass: RequestWorkInterceptor },
+      { provide: APP_INTERCEPTOR, useClass: IdempotencyInterceptor },
       // Database refusals as answers the user can act on; anything unexpected as a 500 with a reference.
       { provide: APP_FILTER, useClass: ErrorAnswerFilter },
     ];
-    const exported = providers.flatMap((p) => (typeof p === 'function' ? [p] : 'provide' in p && p.provide !== APP_GUARD && p.provide !== APP_FILTER ? [p.provide] : []));
+    const exported = providers.flatMap((p) => (typeof p === 'function' ? [p] : 'provide' in p && p.provide !== APP_GUARD && p.provide !== APP_FILTER && p.provide !== APP_INTERCEPTOR ? [p.provide] : []));
     return {
       module: FrameworkModule,
       global: true,
       imports: [
-        ClsModule.forRoot({ global: true, middleware: { mount: true, generateId: true } }),
+        // Every HTTP request's context: its id (hex, tagged on its queries) and its work (abort signal, slot; request-work.ts).
+        ClsModule.forRoot({ global: true, middleware: { mount: true, generateId: true, idGenerator: newRequestId, setup: startRequestWork } }),
         DiscoveryModule,
         SequelizeModule.forFeature(modelsOf(features)),
         ...(options.imports ?? []),

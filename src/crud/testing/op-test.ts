@@ -25,6 +25,8 @@ export interface FakeOpOptions<S extends object, D> {
   services?: Array<[Token<unknown>, unknown]>;
   /** Answers of `c.service(Contract)` calls, by `'contract.call'`: `{ 'platform.seats': { used: 1, max: 5 } }` or a function of the input. */
   calls?: Record<string, unknown | ((input: unknown) => unknown)>;
+  /** The request's abort signal (`c.signal`): an `AbortController`'s, to test a step that stops when it fires. Default: never fires. */
+  signal?: AbortSignal;
 }
 
 /** The context plus what the helpers recorded, for assertions. */
@@ -76,6 +78,7 @@ export function fakeOpContext<M extends Attrs = Attrs, S extends object = Attrs,
     state: (options.state ?? {}) as S,
     issues: new Issues(),
     result: undefined,
+    signal: options.signal ?? new AbortController().signal,
     row,
     before,
     dto: (options.dto ?? {}) as D,
@@ -137,13 +140,15 @@ export type AnyStep = Partial<Record<Phase, (c: never) => Promise<void>>> & { wh
 
 /**
  * Runs steps in the given order, the way the framework does: `check` steps of all, then `before`,
- * then `after` (pass the phases you want), skipping steps whose `when` is false. The main change
+ * then `after` (pass the phases you want), skipping steps whose `when` is false and stopping before the next step once
+ * `c.signal` fired. The main change
  * between `before` and `after` is not simulated; set `c.row` fields yourself if an `after` step needs them.
  */
 export async function runSteps(steps: AnyStep[], c: object, phases: Phase[] = ['check']): Promise<void> {
   for (const phase of phases) {
     for (const step of steps) {
       if (typeof step[phase] !== 'function' || (step.when && !step.when(c as never))) continue;
+      (c as { signal?: AbortSignal }).signal?.throwIfAborted();
       await step[phase]!(c as never);
     }
   }

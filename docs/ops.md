@@ -186,6 +186,9 @@ Every step, the execute file, and the audit share one `c` object. Change it and 
 - **Raw SQL.** `c.count('users WHERE branch_id = :id', { id })` and `c.sql(sql, replacements, t?)` (rows as objects; `t` defaults to `c.t`). Both run in the tenant's schema.
 - **Other services.** `c.service(Platform).command('inviteMember', input)` / `.query('seats', input)` calls another service's contract (in process or over HTTP, the same either way; see Services). It runs in that service's own transaction, not in `c.t`. `await c.emit(TenantMembers, 'memberConfirmed', payload)` publishes an event durably: written in `c.t`, delivered after commit, never for a rollback. Tenant steps never touch the control plane directly.
 - **Other.** `c.result` (return this instead of the saved row).
+- **The request.** `c.signal` fires when the request must stop (its client left on a read, or its time slot ran out;
+  see *A request's life*). The runner stops before the next step by itself; a long loop in an engine or report checks
+  `c.signal.throwIfAborted()` between chunks. Outside an HTTP request (jobs) it never fires.
 
 A query that omits `transaction` sees only committed data, not this operation's own writes.
 
@@ -251,9 +254,72 @@ A global filter (`ErrorAnswerFilter`, `database-errors.ts`) answers every error:
   framework options: `{ constraint: /name pattern/, field, message }`, 422 on that field; Ankpal: a voucher number
   two saves took at once → "save again"); a link to a missing row → 422 on the field; a row still in use → 409
   `in_use`; required / too long / out of range / badly formed → 422 on the column; a statement
-  timeout → 503; a deadlock or serialization conflict → 409 "try again";
+  timeout or a cancelled statement → 503 `{ code: 'timeout' }`; a deadlock or serialization conflict → 409 "try again";
+- a request that was stopped (*A request's life*) answers why it stopped, whatever the stop broke on the way: over its
+  slot 503 `{ code: 'timeout', message }`; its client gone: nothing (nobody is listening);
 - anything else → 500 `{ message, reference }`. The SQL, the stack and the message stay in the log
   under that reference; nothing internal reaches the client.
+
+## A request's life: abort, time slots, idempotent saves
+
+Every HTTP request has its work in the request context (CLS, `request/request-work.ts`): its id (hex, the CLS id), an
+`AbortSignal`, its time slot and whether it only reads.
+
+**Read or write.** A GET reads, any other method writes, unless the route says otherwise: CRUD routes know (list,
+record, view, lookup, history read; create, update, delete write; an action reads when it is `readOnly`), a
+hand-written route says `@Slot(slot, { readOnly: true })` (a POST report). Only the HTTP layer declares it, so a service
+called inside a write never turns it into a read.
+
+**Abort.** The signal fires when
+- the client goes away before the answer (the response closes unfinished) and the request only reads: a report
+  nobody waits for stops; a **write never stops because its client left** (it is short and atomic; its answer can be
+  replayed by its idempotency key);
+- the request runs past its time slot, reads and writes alike: a write is rolled back.
+
+Then: the step runner stops before the next step (`c.signal`; the main change too); new statements of the request are
+refused (a `ROLLBACK` still goes); the request's running statements are cancelled. The transaction rolls back and its
+connection goes back to the pool clean. The answer is 503 `{ code: 'timeout', message }` (client gone: none). A
+request that finished its work answers what it did, even if its slot ran out during the last statement.
+
+**Cancel by tag.** Every statement a request sends starts with `/* r:<request id> */` (the pg client's `query` is
+wrapped once per pooled connection from the `beforeQuery` hook of `installQueryGuards`; Sequelize has read the SQL by
+then). This wrapper is the only patch point and on purpose: Sequelize 6 has no hook that can change a statement's
+text, and the tag must be in the text itself to reach `pg_stat_activity` through RDS Proxy. Outside a request it sends
+the statement untouched. On abort, from another pooled connection and outside the request, on every database the request touched:
+`SELECT pg_cancel_backend(pid) FROM pg_stat_activity WHERE state = 'active' AND query LIKE '/* r:<id> */%' AND pid <> pg_backend_pid()`,
+again while a statement is still running. By tag, not by process id: behind RDS Proxy (a pooler) the app never sees
+its connection's server process.
+
+**Time slots.** `fast` (default: CRUD, lookups, saves), `medium` (reports: ledgers, statements, outstanding, stock
+reports), `slow` (exports, year-end close, recalculations, imports). 30 s, 120 s and 10 minutes, changed in the
+options (`requests: { slots: { fast, medium, slow } }`, milliseconds). Declare a slot where it is not fast:
+
+```ts
+@Post('ledger-report') @Slot('medium', { readOnly: true })   // a hand-written route (or the controller class)
+{ name: 'trialBalance', kind: 'collection', readOnly: true, slot: 'medium', ... }   // an action
+```
+
+The slot counts from the request's start. Inside a transaction the database has the same net: a transaction's first
+statement carries `SET LOCAL statement_timeout = <time left>` (`LOCAL` ends with the transaction; never a session
+`SET`, which pins RDS Proxy connections and leaks to the next request). Outside an HTTP request (jobs) no slot applies.
+
+**Idempotent saves.** A write sent with `Idempotency-Key: <uuid>` runs once per key. The key is the client's: a new
+UUID per submitted save, the same on its retries (a timeout, a reload with the draft), a new one after success. Its
+scope is company + user + method + path + key, kept in Redis (`idempotency: { redis: { url }, prefix }`; first wins
+with `SET NX`, so every pod agrees):
+
+| The same key again | Answer |
+| --- | --- |
+| same body, first save done | the first answer again (status and body), header `Idempotent-Replayed: true` |
+| same body, first save still running | 409 `{ code: 'save_in_progress' }` |
+| another body | 422 `{ code: 'idempotency_key_reused' }` |
+| the first save failed (any 4xx / 5xx) | the key was freed: this save runs |
+
+The body is compared as canonical JSON (key order does not matter) with the query. The first save holds its key for
+its slot and a minute (a dead pod frees it), its answer is kept 24 hours (`ttlMs`). A key that is not a UUID: 400
+`idempotency_key_invalid`. No key: as before. A read ignores the key. No Redis configured: keys are ignored (logged
+once); Redis unreachable: the save runs unchecked (logged once per outage). The contract lists the header on every
+write (`components.parameters.IdempotencyKey`) and `x-slot` on every route that is not fast.
 
 ## Lists and views
 
@@ -347,6 +413,8 @@ The options (`FrameworkOptions`) carry the rest:
 | `schemaParity` | `block` (503, default when owned), `warn` (logged once per schema, default when external), `off` |
 | `refs.undeclared` | undeclared id columns when building a schema: `error`, `warn` (default), `off` |
 | `redis`, `services`, `admin` | as before |
+| `requests.slots` | time slots in milliseconds: `{ fast: 30000, medium: 120000, slow: 600000 }` (the defaults; see *A request's life*) |
+| `idempotency` | `{ redis: { url }, prefix, ttlMs }`: idempotent saves (`Idempotency-Key`); without `redis` keys are ignored |
 | `logging.http` | `off`, `basic` (default: a `request.start` and a `request.finish` line per request, as JSON under `HTTP`: method, URL, company, tenant, user, status, ms, and `queries`: the SQL statements the request sent on every pool), `verbose` (also the payload and the response body, errors included). Passwords are `[REDACTED]`, tokens cut to their start (`logging.redact` adds keys); bodies cut at `logging.bodyLimit` (4000); `logging.skip` paths are not logged (`/api/health`) |
 | `logging.queryHeader` | `true`: every answer carries `x-ops-queries` (statements the request sent) and `x-ops-ms` (time in the server), counted per request by the query guard. For development and test servers (a performance harness reads them); default off |
 | `logging.queryCapture` | a folder: every distinct statement (by its shape: literals and placeholders out) is saved once per schema as `<dir>/<schema>/<hash>.json` with the SQL as run and its `bind` / `replacements`, for a script that `EXPLAIN`s them in every schema (missing indexes, slow plans). Never fails a query. Development and test servers only; default off |

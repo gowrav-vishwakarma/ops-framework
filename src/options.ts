@@ -8,6 +8,7 @@ import type { PartitionConfig } from './tenancy/partition.js';
 import type { LoggingOptions } from './logging/request-log.js';
 import type { FieldErrors } from './errors.js';
 import type { PayloadStrictness } from './payload/check-payload.js';
+import type { RequestOptions } from './request/request-work.js';
 
 export const FRAMEWORK_OPTIONS = Symbol('FRAMEWORK_OPTIONS');
 
@@ -157,6 +158,16 @@ export interface FrameworkOptions {
    * service events. Unset: one process only (local bus, in-process events).
    */
   redis?: { url: string };
+  /**
+   * Every HTTP request's time slots (`@Slot`, an action's `slot`): `{ slots: { fast, medium, slow } }` in
+   * milliseconds, default 30 s, 120 s and 10 min. Over its slot a request stops with 503 `timeout` (a write rolled back).
+   */
+  requests?: RequestOptions;
+  /**
+   * Idempotent saves (`Idempotency-Key` on a write): kept in this Redis (first wins, answers for `ttlMs`, default 24 h)
+   * under `prefix`. Without `redis` a key is ignored (logged once).
+   */
+  idempotency?: { redis?: { url: string } | null; prefix?: string; ttlMs?: number };
   /**
    * The admin side (control plane): who platform admins are and what they may do. Without it no
    * admin token is accepted. The admin table and sign-in are the project's; the framework keeps the

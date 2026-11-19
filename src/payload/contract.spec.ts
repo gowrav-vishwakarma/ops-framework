@@ -3,6 +3,7 @@ import { Test } from '@nestjs/testing';
 import { Type } from 'class-transformer';
 import { IsArray, IsIn, IsInt, IsOptional, IsString, ValidateBy, ValidateNested } from 'class-validator';
 import { describe, expect, it } from 'vitest';
+import { Slot } from '../request/slot.js';
 import { collectRoutes, openApi } from './contract.js';
 
 class ContractLine {
@@ -36,6 +37,11 @@ class ThingsController {
   cancel(@Param('id') _id: string, @Body('reason') _reason: string) {
     return {};
   }
+  @Post('report')
+  @Slot('medium', { readOnly: true })
+  report(@Body() _body: ContractFilter) {
+    return {};
+  }
 }
 
 describe('the contract: every route with what it takes', async () => {
@@ -50,7 +56,28 @@ describe('the contract: every route with what it takes', async () => {
       { method: 'post', path: '/api/things', body: 'ContractSave', query: undefined, gap: undefined },
       { method: 'patch', path: '/api/things/{id}', body: undefined, query: undefined, gap: 'body typed Object (a Record, an interface or a literal type): give it a class' },
       { method: 'post', path: '/api/things/{id}/actions/cancel', body: undefined, query: undefined, gap: 'body fields picked one by one (@Body(name)): give the body a class' },
+      { method: 'post', path: '/api/things/report', body: 'ContractFilter', query: undefined, gap: undefined },
     ]);
+  });
+
+  it('what each route does: a GET reads, any other method writes unless @Slot says it only reads; its slot (fast by default)', () => {
+    expect(routes.map((r) => `${r.method} ${r.path} ${r.readOnly ? 'read' : 'write'} ${r.slot}`)).toEqual([
+      'get /api/things read fast',
+      'post /api/things write fast',
+      'patch /api/things/{id} write fast',
+      'post /api/things/{id}/actions/cancel write fast',
+      'post /api/things/report read medium',
+    ]);
+    const { document } = openApi(routes, { title: 'Things', version: '1', customValidators: { shortCode: { type: 'string' } } });
+    const paths = document.paths as Record<string, Record<string, { parameters?: unknown[]; 'x-slot'?: string }>>;
+    const key = { $ref: '#/components/parameters/IdempotencyKey' };
+    // Writes take the idempotency key; reads (and a POST report that only reads) do not.
+    expect(paths['/api/things']!.post!.parameters).toEqual([key]);
+    expect(paths['/api/things']!.get!.parameters).not.toContainEqual(key);
+    expect(paths['/api/things/report']!.post!.parameters).toBeUndefined();
+    expect(paths['/api/things/report']!.post!['x-slot']).toBe('medium');
+    expect(paths['/api/things']!.post!['x-slot']).toBeUndefined();
+    expect((document.components as { parameters: Record<string, { name: string; in: string }> }).parameters.IdempotencyKey).toMatchObject({ name: 'Idempotency-Key', in: 'header' });
   });
 
   it('OpenAPI 3.1: bodies as schemas (nested classes included), queries as parameters, gaps marked', () => {
@@ -62,7 +89,7 @@ describe('the contract: every route with what it takes', async () => {
       // An allowed-values list with a null: an enum without a single type.
       { name: 'state', in: 'query', schema: { enum: [null, 'open', 'closed'] } },
     ]);
-    expect(paths['/api/things/{id}']!.patch!.parameters).toEqual([{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }]);
+    expect(paths['/api/things/{id}']!.patch!.parameters).toEqual([{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }, { $ref: '#/components/parameters/IdempotencyKey' }]);
     const schemas = document.components.schemas as Record<string, { properties: Record<string, unknown>; required?: string[] }>;
     expect(schemas.ContractSave!.properties.lines).toEqual({ type: 'array', items: { $ref: '#/components/schemas/ContractLine' } });
     expect(schemas.ContractLine!.properties.productId).toEqual({ type: 'integer' });

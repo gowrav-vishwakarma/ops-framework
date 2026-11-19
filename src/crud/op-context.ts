@@ -95,6 +95,15 @@ export interface OpBase<S extends object = Attrs, U extends Actor = AuthUser> {
   sql: QueryFn;
   /** What the endpoint returns instead of the record (print data, import summary). Set by any step. */
   result: unknown;
+
+  // ---- the request ----
+  /**
+   * Fires when the request must stop: its client left (reads only; a write always finishes) or its time slot ran out
+   * (a write is then rolled back). The runner stops before the next step on its own, and the request's queries are
+   * cancelled; a long loop in an engine or report checks it (`c.signal.throwIfAborted()` between chunks). Outside an
+   * HTTP request it never fires.
+   */
+  signal: AbortSignal;
 }
 
 /** A create, update, delete, row action or view: one record. */

@@ -5,6 +5,7 @@ import type { AclScope, Actor, ReqCtx } from '../auth/auth-user.js';
 import { EventOutbox } from '../services/event-outbox.js';
 import { ServiceClient } from '../services/service-client.js';
 import { inheritMark, sequelizeOf } from '../tenancy/guards.js';
+import { requestSignal } from '../request/request-work.js';
 import { Issues } from './issues.js';
 import type { Attrs, OpBase } from './op-context.js';
 
@@ -62,6 +63,7 @@ export function makeOpBase<U extends Actor>(env: OpBaseEnv<U>, op: string, ctx: 
     state: {},
     issues: new Issues(),
     result: undefined,
+    signal: requestSignal(),
     count: (sql, replacements) => countRows(t, sql, replacements),
     sql: <T>(sql: string, replacements: Record<string, unknown> | unknown[] = {}, on: Transaction = t) =>
       sequelizeOf(on).query(sql, { replacements, type: QueryTypes.SELECT, transaction: on }) as Promise<T[]>,

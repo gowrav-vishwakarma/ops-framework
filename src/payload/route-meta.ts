@@ -8,3 +8,9 @@ export const PAYLOAD_FALLBACK = 'ops:payload-fallback';
 export const CRUD_ROUTE = 'ops:crud-route';
 
 export type CrudRouteKind = 'create' | 'update' | 'list' | 'act' | 'actAll' | 'view' | 'lookup';
+
+/**
+ * How long a route may run and whether it only reads (`request/slot.ts`): a `WorkDeclaration`, or for a generic CRUD
+ * route a function of the request (an action route asks the action it names). Set by `@Slot` and `crudController`.
+ */
+export const ROUTE_WORK = 'ops:route-work';

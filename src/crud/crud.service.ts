@@ -39,6 +39,7 @@ import type { JsonColumns } from './json-columns.js';
 import { limitsFor, runBuiltInChecks, startStateReason, type BuiltInChecks } from './row-checks.js';
 import { guardsFor, RowGuardRegistry, type RowGuard } from './row-guard.js';
 import { runAsOperation, type OperationAccess } from './write-guard.js';
+import type { SlotName } from '../request/request-work.js';
 
 export type { Attrs, EntityFlow };
 
@@ -508,7 +509,7 @@ export abstract class CrudService<
   payloadContract(): {
     label: string;
     dtos: Record<string, Type<object>>;
-    actions: Array<{ name: string; label: string; kind: 'row' | 'bulk' | 'collection'; input?: Type<object> }>;
+    actions: Array<{ name: string; label: string; kind: 'row' | 'bulk' | 'collection'; input?: Type<object>; readOnly: boolean; slot: SlotName }>;
     lists: string[];
     views: string[];
     lookups: string[];
@@ -517,7 +518,7 @@ export abstract class CrudService<
     return {
       label: this.label,
       dtos: Object.fromEntries(this.ops.dtoFolders().map((op) => [op, this.ops.dto(op)!.dto])),
-      actions: this.actionList.map((action) => ({ name: action.name, label: action.label, kind: action.kind ?? 'row', input: this.ops.dto(action.name)?.dto ?? action.input })),
+      actions: this.actionList.map((action) => ({ name: action.name, label: action.label, kind: action.kind ?? 'row', input: this.ops.dto(action.name)?.dto ?? action.input, readOnly: action.readOnly === true, slot: action.slot ?? 'fast' })),
       lists: names.filter((n) => n.startsWith('list-')).map((n) => n.slice(5)),
       views: names.filter((n) => n.startsWith('view-')).map((n) => n.slice(5)),
       lookups: Object.keys(this.lookups),
@@ -907,15 +908,18 @@ export abstract class CrudService<
   private async runMain(c: OpBase<Attrs, U>, original: () => Promise<unknown>): Promise<void> {
     const execute = this.ops.execute(c.op);
     const builtIn = async () => {
+      c.signal.throwIfAborted();
       await original();
     };
     if (!execute) return builtIn();
     await this.annotate(execute, () => execute.impl.run(c as never, builtIn));
   }
 
+  /** The phase's steps in file order; an aborted request (client gone on a read, slot over) stops before the next one. */
   private async runPhase(c: OpBase<Attrs, U>, phase: Phase): Promise<void> {
     for (const loaded of this.ops.steps(c.op)) {
       if (loaded.phase !== phase || (loaded.impl.when && !loaded.impl.when(c as never))) continue;
+      c.signal.throwIfAborted();
       await this.runStep(loaded, c);
     }
   }

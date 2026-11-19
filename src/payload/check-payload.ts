@@ -22,6 +22,12 @@ export interface PayloadCheck {
 }
 
 const logger = new Logger('Payloads');
+/**
+ * The payload of an action that takes nothing (activate, deactivate): `input: NoPayload`. Strict, anything sent is an
+ * unknown field; the contract shows the action without a body.
+ */
+export class NoPayload {}
+
 /** endpoint → field (array positions as `*`) → times seen. */
 const seen = new Map<string, Map<string, number>>();
 

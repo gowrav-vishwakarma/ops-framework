@@ -12,7 +12,7 @@ export * from './errors.js';
 export * from './dto.js';
 
 // Request payloads held to their DTO (an operation's dto.ts, a controller's class)
-export { checkPayload, payloadProblems, payloadWarnings, resetPayloadWarnings, type PayloadCheck, type PayloadStrictness } from './payload/check-payload.js';
+export { checkPayload, NoPayload, payloadProblems, payloadWarnings, resetPayloadWarnings, type PayloadCheck, type PayloadStrictness } from './payload/check-payload.js';
 export { PayloadPipe } from './payload/payload-pipe.js';
 export { collectRoutes, openApi, type ContractRoute, type OpenApiOptions } from './payload/contract.js';
 export * from './money.js';

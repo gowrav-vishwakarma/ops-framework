@@ -5,6 +5,7 @@ import { defaultMetadataStorage } from 'class-transformer/cjs/storage.js';
 import { getMetadataStorage, IS_IN, IS_NOT_IN, ValidationTypes } from 'class-validator';
 import { validationMetadatasToSchemas } from 'class-validator-jsonschema';
 import type { SchemaObject } from 'openapi3-ts';
+import { NoPayload } from './check-payload.js';
 import { CRUD_ROUTE, PAYLOAD_FALLBACK, type CrudRouteKind } from './route-meta.js';
 
 /** One endpoint of the app as the contract lists it. */
@@ -126,7 +127,7 @@ function crudRoutes(kind: CrudRouteKind, method: ContractRoute['method'], path: 
         method,
         path: path.replace('{name}', a.name),
         operation: `${label} action ${a.name} (${a.label})`,
-        ...(a.input ? { body: a.input } : { gap: 'action without a payload class (dto.ts)' }),
+        ...(a.input === NoPayload ? {} : a.input ? { body: a.input } : { gap: 'action without a payload class (dto.ts, or input: NoPayload when it takes nothing)' }),
       }));
     }
     case 'view':

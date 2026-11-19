@@ -1,3 +1,4 @@
+import { NoPayload } from '../payload/check-payload.js';
 import type { Model } from 'sequelize-typescript';
 import type { Actor, AuthUser } from '../auth/auth-user.js';
 import type { EntityAction } from './entity-action.js';
@@ -36,6 +37,7 @@ export function statusActions<M extends Model, U extends Actor = AuthUser>(optio
       from: { [field]: options.deactivateFrom ?? [active] },
       confirm: `Deactivate this ${options.noun}?`,
       danger: true,
+      input: NoPayload,
       run: setTo(inactive),
       effect: `${field} -> ${inactive}`,
     },
@@ -44,6 +46,7 @@ export function statusActions<M extends Model, U extends Actor = AuthUser>(optio
       label: 'Activate',
       from: { [field]: options.activateFrom ?? [inactive] },
       confirm: `Activate this ${options.noun}?`,
+      input: NoPayload,
       run: setTo(active),
       effect: `${field} -> ${active}`,
     },

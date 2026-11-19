@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { Type } from 'class-transformer';
-import { IsArray, IsInt, IsOptional, IsString, ValidateBy, ValidateNested } from 'class-validator';
+import { IsArray, IsIn, IsInt, IsOptional, IsString, ValidateBy, ValidateNested } from 'class-validator';
 import { describe, expect, it } from 'vitest';
 import { collectRoutes, openApi } from './contract.js';
 
@@ -15,6 +15,7 @@ class ContractSave {
 }
 class ContractFilter {
   @IsOptional() @IsString() search?: string;
+  @IsOptional() @IsIn([null, 'open', 'closed']) state?: string | null;
 }
 
 @Controller('things')
@@ -56,7 +57,11 @@ describe('the contract: every route with what it takes', async () => {
     const { document, gaps, unconverted } = openApi(routes, { title: 'Things', version: '1', customValidators: {} });
     const paths = document.paths as Record<string, Record<string, { requestBody?: unknown; parameters?: Array<{ name: string; in: string }>; 'x-payload-gap'?: string }>>;
     expect(paths['/api/things']!.post!.requestBody).toEqual({ required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/ContractSave' } } } });
-    expect(paths['/api/things']!.get!.parameters).toEqual([{ name: 'search', in: 'query', schema: { type: 'string' } }]);
+    expect(paths['/api/things']!.get!.parameters).toEqual([
+      { name: 'search', in: 'query', schema: { type: 'string' } },
+      // An allowed-values list with a null: an enum without a single type.
+      { name: 'state', in: 'query', schema: { enum: [null, 'open', 'closed'] } },
+    ]);
     expect(paths['/api/things/{id}']!.patch!.parameters).toEqual([{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }]);
     const schemas = document.components.schemas as Record<string, { properties: Record<string, unknown>; required?: string[] }>;
     expect(schemas.ContractSave!.properties.lines).toEqual({ type: 'array', items: { $ref: '#/components/schemas/ContractLine' } });

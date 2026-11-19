@@ -2,7 +2,7 @@ import { RequestMethod, type INestApplication, type Type } from '@nestjs/common'
 import { METHOD_METADATA, PATH_METADATA, ROUTE_ARGS_METADATA } from '@nestjs/common/constants.js';
 import { MetadataScanner, ModulesContainer } from '@nestjs/core';
 import { defaultMetadataStorage } from 'class-transformer/cjs/storage.js';
-import { getMetadataStorage, ValidationTypes } from 'class-validator';
+import { getMetadataStorage, IS_IN, IS_NOT_IN, ValidationTypes } from 'class-validator';
 import { validationMetadatasToSchemas } from 'class-validator-jsonschema';
 import type { SchemaObject } from 'openapi3-ts';
 import { CRUD_ROUTE, PAYLOAD_FALLBACK, type CrudRouteKind } from './route-meta.js';
@@ -136,6 +136,12 @@ function crudRoutes(kind: CrudRouteKind, method: ContractRoute['method'], path: 
   }
 }
 
+/** `{ enum }` of the values, typed when they all share one JSON type. */
+function enumOf(values: unknown[]): SchemaObject {
+  const types = new Set(values.map((v) => (v === null ? 'null' : Number.isInteger(v) ? 'integer' : typeof v === 'number' ? 'number' : typeof v)));
+  return { ...(types.size === 1 && !types.has('null') ? { type: [...types][0] as SchemaObject['type'] } : {}), enum: values };
+}
+
 export interface OpenApiOptions {
   title: string;
   version: string;
@@ -154,6 +160,9 @@ export function openApi(routes: ContractRoute[], options: OpenApiOptions) {
     refPointerPrefix: '#/components/schemas/',
     classTransformerMetadataStorage: defaultMetadataStorage,
     additionalConverters: {
+      // An allowed-values list as an enum (the library's own fails on values it cannot type, such as null).
+      [IS_IN]: (meta) => enumOf(meta.constraints[0] as unknown[]),
+      [IS_NOT_IN]: (meta) => ({ not: enumOf(meta.constraints[0] as unknown[]) }),
       [ValidationTypes.CUSTOM_VALIDATION]: (meta) => {
         const name = (meta as { name?: string }).name ?? meta.constraintCls?.name ?? 'custom';
         const schema = options.customValidators?.[name];

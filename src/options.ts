@@ -28,6 +28,18 @@ export interface AudienceDef {
   userClaims: (claims: Record<string, unknown>) => AuthUser;
 }
 
+/**
+ * The app's answer for a unique constraint it knows (`FrameworkOptions.databaseErrors.unique`): a refused write whose
+ * constraint name matches `constraint` answers 422 `{ message, errors: { [field]: [message] } }` instead of the
+ * generic "<field> already exists" on every key column.
+ */
+export interface UniqueAnswer {
+  constraint: RegExp;
+  /** The field the client shows it on; a function reads it from the constraint name's match. */
+  field: string | ((match: RegExpExecArray) => string);
+  message: string;
+}
+
 export interface FrameworkOptions {
   /** Every permission: resource, action, label, group, and the scopes the resource offers. */
   catalog: readonly PermissionEntry[];
@@ -167,6 +179,8 @@ export interface FrameworkOptions {
    * `refuse` turns field errors into the app's answer (default: `payloadErrors`, 400: malformed against the contract).
    */
   payloads?: { strict?: PayloadStrictness; refuse?: (errors: FieldErrors) => Error };
+  /** Database refusals the app answers in its own words (`database-errors.ts`); the first matching rule wins. */
+  databaseErrors?: { unique?: UniqueAnswer[] };
   /** Service contracts between deployments (see `services/`). */
   services?: {
     /**

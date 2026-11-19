@@ -7,7 +7,8 @@ const PLAIN: unknown[] = [Object, String, Number, Boolean, Array];
 /**
  * The app's global pipe for request bodies and queries typed with a DTO class (`@Body() body: ReceiptSaveDto`): each is
  * held to its class as `checkPayload` does, in the deployment's strictness. Parameters typed `Object` (a `Record`, an
- * interface), primitives and route params pass untouched: an operation's `dto.ts` covers the framework's own routes.
+ * interface) and other primitives pass untouched (a named param or query typed number / boolean is converted, as
+ * Nest's ValidationPipe does): an operation's `dto.ts` covers the framework's own routes.
  *
  *   app.useGlobalPipes(new PayloadPipe('warn', (errors) => fieldErrors(errors)));
  */
@@ -19,6 +20,12 @@ export class PayloadPipe implements PipeTransform {
 
   transform(value: unknown, metadata: ArgumentMetadata): unknown {
     const { type, metatype, data } = metadata;
+    // A named param or query typed number / boolean is converted, as Nest's ValidationPipe (transform) does.
+    if (data && (type === 'param' || type === 'query')) {
+      if (metatype === Number) return value === undefined ? value : +(value as string);
+      if (metatype === Boolean) return value === undefined ? value : value === true || value === 'true';
+      return value;
+    }
     if ((type !== 'body' && type !== 'query') || data || !metatype || PLAIN.includes(metatype)) return value;
     return checkPayload(metatype as Type<object>, value ?? {}, { endpoint: `${type} ${metatype.name}`, mode: this.mode, refuse: this.refuse });
   }

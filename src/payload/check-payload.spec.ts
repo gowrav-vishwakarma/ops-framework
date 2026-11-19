@@ -77,13 +77,15 @@ describe('checkPayload: a payload held to its DTO', () => {
 describe('PayloadPipe: controller bodies and queries typed with a class', () => {
   beforeEach(() => resetPayloadWarnings());
 
-  it('checks a class-typed body; passes Object-typed bodies, primitives and named params untouched', () => {
+  it('checks a class-typed body; passes Object-typed bodies untouched; converts named number / boolean params as Nest does', () => {
     const pipe = new PayloadPipe('error');
     expect(pipe.transform(good, { type: 'body', metatype: Invoice })).toBeInstanceOf(Invoice);
     expect(() => pipe.transform({ ...good, extra: 1 }, { type: 'body', metatype: Invoice })).toThrow();
     const loose = { anything: 1 };
     expect(pipe.transform(loose, { type: 'body', metatype: Object })).toBe(loose);
-    expect(pipe.transform('5', { type: 'param', metatype: Number, data: 'id' })).toBe('5');
+    expect(pipe.transform('5', { type: 'param', metatype: Number, data: 'id' })).toBe(5);
+    expect(pipe.transform('true', { type: 'query', metatype: Boolean, data: 'all' })).toBe(true);
+    expect(pipe.transform(undefined, { type: 'query', metatype: Number, data: 'limit' })).toBeUndefined();
     expect(pipe.transform('true', { type: 'query', metatype: String, data: 'confirm' })).toBe('true');
   });
 

@@ -1,6 +1,7 @@
 import 'reflect-metadata';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { Issues } from './issues.js';
+import { resetPayloadWarnings, payloadWarnings } from '../payload/check-payload.js';
 import { applyJsonColumns, checkJson, JsonField, jsonListShape, jsonMapShape, mergeJson } from './json-columns.js';
 
 class Ref {
@@ -141,6 +142,37 @@ describe('applyJsonColumns', () => {
     const cleared = target({ section: { digits: null } }, before);
     applyJsonColumns(cleared.c, { section: Section }, 'Row', { merge: true });
     expect(cleared.values.section).toEqual({ enable: true, digits: null, legacy: 'x' });
+  });
+});
+
+describe('applyJsonColumns: unknown keys by payload strictness', () => {
+  const target = (dto: Record<string, unknown>, before: Record<string, unknown> | null = null) => {
+    const values: Record<string, unknown> = {};
+    class Row {
+      set(key: string, value: unknown) {
+        values[key] = value;
+      }
+    }
+    return { c: { dto, before, row: new Row(), issues: new Issues() }, values };
+  };
+  beforeEach(() => resetPayloadWarnings());
+
+  it('warn: dropped as before (a stored one sent back unchanged kept) and reported per column', () => {
+    const { c, values } = target({ section: { enable: true, junk: 1, legacy: 'x' } }, { section: { legacy: 'x' } });
+    applyJsonColumns(c, { section: Section }, 'Row', { strict: 'warn' });
+    expect(values).toEqual({ section: { enable: true, legacy: 'x' } });
+    expect(c.issues.fields).toEqual({});
+    expect(payloadWarnings()).toEqual([
+      { endpoint: 'Row section', field: 'section.junk', count: 1 },
+      { endpoint: 'Row section', field: 'section.legacy', count: 1 },
+    ]);
+  });
+
+  it('error: every unknown key refused, a stored one sent back unchanged too; the column is not set', () => {
+    const { c, values } = target({ section: { enable: true, junk: 1, legacy: 'x' } }, { section: { legacy: 'x' } });
+    applyJsonColumns(c, { section: Section }, 'Row', { strict: 'error' });
+    expect(c.issues.fields).toEqual({ 'section.junk': ['junk is not a field of this payload'], 'section.legacy': ['legacy is not a field of this payload'] });
+    expect(values).toEqual({});
   });
 });
 

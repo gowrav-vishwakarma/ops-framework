@@ -528,9 +528,11 @@ A CRUD service declares `jsonColumns = { itemSettings: ItemSettings }`. A create
 one of them checks it before guards, limits and check steps:
 
 - a wrong type is a 422 field error on its path (`itemSettings.qtyDecimal`), every problem at once;
-- a key the shape does not declare is dropped and logged once (`JsonColumns` logger), unless the client
-  sent it back unchanged from the stored value (forms load a column and post it whole): then it stays,
-  so an incomplete shape never erases stored data;
+- a key the shape does not declare follows `payloads.strict`: with `off` / `warn` it is dropped and logged once
+  (`JsonColumns` logger; `warn` also lists it in `payloadWarnings()` as `<Model> <column>`), unless the client sent
+  it back unchanged from the stored value (forms load a column and post it whole): then it stays, so an incomplete
+  shape never erases stored data; with `error` it is refused (a 422 field error on its path), kept or not, and the
+  column is left as stored: a new key needs the shape, deliberately;
 - the row takes the checked value: the column is replaced (a plain JSON update), keys the client left
   out are not merged back; or, with `jsonMerge = true` on the service, the checked value is merged into
   the stored one (`mergeJson`): a partial save changes only the keys it sends at every depth, an explicit

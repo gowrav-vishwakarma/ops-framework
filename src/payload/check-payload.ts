@@ -41,6 +41,11 @@ export function resetPayloadWarnings(): void {
   seen.clear();
 }
 
+/** Reports unknown fields an endpoint received (once in the log per field, counted in `payloadWarnings()`). */
+export function reportUnknownFields(endpoint: string, fields: string[]): void {
+  note(endpoint, fields);
+}
+
 function note(endpoint: string, fields: string[]): void {
   let known = seen.get(endpoint);
   if (!known) seen.set(endpoint, (known = new Map()));

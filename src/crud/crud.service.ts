@@ -527,7 +527,7 @@ export abstract class CrudService<
   // ---- writes ---------------------------------------------------------------------------
 
   private writeChecks(op: string, label: string): BuiltInChecks<M> {
-    return { label, limits: limitsFor(op, this.limits), guards: this.guards, refs: true, json: this.jsonColumns, jsonMerge: this.jsonMerge };
+    return { label, limits: limitsFor(op, this.limits), guards: this.guards, refs: true, json: this.jsonColumns, jsonMerge: this.jsonMerge, jsonStrict: this.frameworkOptions?.payloads?.strict ?? 'off' };
   }
 
   async create(ctx: ReqCtx<U>, dto: TCreate, outer?: Transaction, confirmed = false): Promise<unknown> {

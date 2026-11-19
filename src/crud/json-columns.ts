@@ -1,4 +1,5 @@
 import { Logger, type Type } from '@nestjs/common';
+import { reportUnknownFields, type PayloadStrictness } from '../payload/check-payload.js';
 import { plainToInstance, Transform } from 'class-transformer';
 import { Allow, IsArray, IsBoolean, IsIn, IsOptional, IsString, ValidateBy, ValidateNested, validateSync, type ValidationError } from 'class-validator';
 import type { Issues } from './issues.js';
@@ -307,18 +308,25 @@ export interface JsonColumnsTarget {
 /**
  * Check the JSON columns a write sends (`c.dto`) against their shapes: problems become field errors
  * (`itemSettings.qtyDecimal`), unknown keys are dropped (or kept when sent back unchanged) and logged
- * once, and the row takes the checked value (with `merge`, merged into the stored one: a partial save keeps
+ * once (`strict: 'warn'` also reports them with the payload warnings; `strict: 'error'` refuses them, kept or not), and the row takes the checked value (with `merge`, merged into the stored one: a partial save keeps
  * the keys it does not send). Columns the write does not send are left alone. CRUD services do it for their
  * `jsonColumns` before the check steps; a step that saves by other means calls it itself.
  */
-export function applyJsonColumns(c: JsonColumnsTarget, columns: JsonColumns, scope = c.row.constructor.name, options: { merge?: boolean } = {}): void {
+export function applyJsonColumns(c: JsonColumnsTarget, columns: JsonColumns, scope = c.row.constructor.name, options: { merge?: boolean; strict?: PayloadStrictness } = {}): void {
   const dto = (c.dto ?? {}) as Record<string, unknown>;
   for (const [column, shape] of Object.entries(columns)) {
     if (!(column in dto) || dto[column] === undefined) continue;
     const result = checkJson(shape, dto[column], { path: column, stored: c.before?.[column] });
     for (const problem of result.problems) c.issues.field(problem.path, problem.message);
+    const unknown = [...result.dropped, ...result.kept];
+    if (options.strict === 'error') {
+      // Strict: a key the shape does not name is refused, even one sent back unchanged (a new key needs the shape).
+      for (const path of unknown) c.issues.field(path, `${path.split('.').pop()} is not a field of this payload`);
+      continue;
+    }
     logUnknown(scope, result.dropped, 'dropped');
     logUnknown(scope, result.kept, 'kept (sent back unchanged)');
+    if (options.strict === 'warn' && unknown.length) reportUnknownFields(`${scope} ${column}`, [...new Set(unknown.map((p) => p.replace(/\.\d+(?=\.|$)/g, '.*')))]);
     c.row.set(column, options.merge && result.value !== null ? mergeJson(c.before?.[column], result.value) : result.value);
   }
 }

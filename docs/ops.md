@@ -281,12 +281,14 @@ refused (a `ROLLBACK` still goes); the request's running statements are cancelle
 connection goes back to the pool clean. The answer is 503 `{ code: 'timeout', message }` (client gone: none). A
 request that finished its work answers what it did, even if its slot ran out during the last statement.
 
-**Cancel by tag.** Every statement a request sends starts with `/* r:<request id> */` (the pg client's `query` is
-wrapped once per pooled connection from the `beforeQuery` hook of `installQueryGuards`; Sequelize has read the SQL by
-then). This wrapper is the only patch point and on purpose: Sequelize 6 has no hook that can change a statement's
-text, and the tag must be in the text itself to reach `pg_stat_activity` through RDS Proxy. Outside a request it sends
-the statement untouched. On abort, from another pooled connection and outside the request, on every database the request touched:
-`SELECT pg_cancel_backend(pid) FROM pg_stat_activity WHERE state = 'active' AND query LIKE '/* r:<id> */%' AND pid <> pg_backend_pid()`,
+**Cancel by tag.** Every statement a request sends starts with a comment that says who sent it:
+`/* r:<request id> c:<company> op:<Model.op> step:<step file> */` (op and step only while a step runs: the runner names
+them, no stack walk; `*/` in a value is broken up). It is added by one patch of Sequelize's Postgres
+`Query.prototype.run`, installed once per process at boot (`request/query-tag.ts`, as classic does for its SQL
+comments): Sequelize 6 has no hook that can change a statement's text, and the tag must be in the text to reach
+`pg_stat_activity` through RDS Proxy. Outside a request the statement goes untouched. On abort, from another pooled
+connection and outside the request, on every database the request touched:
+`SELECT pg_cancel_backend(pid) FROM pg_stat_activity WHERE state = 'active' AND query LIKE '/* r:<id> %' AND pid <> pg_backend_pid()`,
 again while a statement is still running. By tag, not by process id: behind RDS Proxy (a pooler) the app never sees
 its connection's server process.
 
@@ -315,7 +317,10 @@ with `SET NX`, so every pod agrees):
 | another body | 422 `{ code: 'idempotency_key_reused' }` |
 | the first save failed (any 4xx / 5xx) | the key was freed: this save runs |
 
-The body is compared as canonical JSON (key order does not matter) with the query. The first save holds its key for
+The body is compared as canonical JSON (key order does not matter) with the query and the uploaded files (field,
+name, size, a hash of the content). A route that parses uploads in its own interceptor lists `IdempotencyInterceptor`
+after it (`UseInterceptors(AnyFilesInterceptor(), IdempotencyInterceptor, …)`); the global one then leaves it the
+request, so the files are known when it compares. The first save holds its key for
 its slot and a minute (a dead pod frees it), its answer is kept 24 hours (`ttlMs`). A key that is not a UUID: 400
 `idempotency_key_invalid`. No key: as before. A read ignores the key. No Redis configured: keys are ignored (logged
 once); Redis unreachable: the save runs unchecked (logged once per outage). The contract lists the header on every

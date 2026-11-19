@@ -63,6 +63,8 @@ export class RequestWork {
   deadline: number | null = null;
   /** Queries sent and not answered yet. */
   inFlight = 0;
+  /** The operation (`<Model>.<op>`) and step file running now, named in the request's query tags; none outside a step. */
+  at: { op?: string; step?: string } = {};
   private readonly controller = new AbortController();
   private readonly databases = new Map<string, Sequelize>();
   private timer: NodeJS.Timeout | null = null;
@@ -100,6 +102,17 @@ export class RequestWork {
     this.ended = true;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+  }
+
+  /** Runs a step with its operation and file named in the tag of every statement it sends; the caller's come back after. */
+  async within<T>(op: string, step: string, work: () => Promise<T>): Promise<T> {
+    const outer = this.at;
+    this.at = { op, step };
+    try {
+      return await work();
+    } finally {
+      this.at = outer;
+    }
   }
 
   /** A database the request sent a query to (cancelled there on abort). */

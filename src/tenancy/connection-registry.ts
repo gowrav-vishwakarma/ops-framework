@@ -9,6 +9,7 @@ import { sqlLogger } from '../logging/request-log.js';
 import { FRAMEWORK_OPTIONS, type FrameworkOptions } from '../options.js';
 import { FRAMEWORK_FEATURES, PLACEMENT_STORE, type PlacementStore, type ResolvedFeatures } from '../features.js';
 import { installDdlGuard, installQueryGuards } from './guards.js';
+import { installQueryTag } from '../request/query-tag.js';
 import { bindTenantModels, controlModelsOf, tenantModelsOf } from './model-binding.js';
 
 export const PRIMARY = 'primary';
@@ -93,6 +94,8 @@ export class ConnectionRegistry implements OnModuleDestroy, OnModuleInit {
     @Optional() @Inject(FRAMEWORK_FEATURES) private readonly features?: ResolvedFeatures,
   ) {
     this.instances.set(PRIMARY, primary);
+    // Once per process: every statement of an HTTP request carries its tag (request/query-tag.ts).
+    installQueryTag();
     this.guard(primary, PRIMARY, this.toucher(PRIMARY));
     bindTenantModels(primary, () => this.control);
   }

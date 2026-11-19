@@ -6,7 +6,6 @@ import { currentTenant } from './context.js';
 import { NAMES } from '../naming.js';
 import { isControlModel } from './model-binding.js';
 import { countQuery } from '../logging/query-stats.js';
-import { tagRequestQueries } from '../request/query-tag.js';
 import { currentWork } from '../request/request-work.js';
 
 /** What a transaction was opened for. Set by `TenantDb` and `ControlPlane`, read by the guards. */
@@ -34,7 +33,7 @@ export function inheritMark(from: Transaction, to: Transaction): Transaction {
 }
 
 type QueryOptions = { transaction?: Transaction | null; model?: unknown; instance?: { constructor: unknown } };
-type QueryLike = { sql?: string; connection?: unknown } | undefined;
+type QueryLike = { sql?: string } | undefined;
 
 function targetModel(options: QueryOptions) {
   return (options.model ?? options.instance?.constructor) as Parameters<typeof isControlModel>[0] | undefined;
@@ -46,14 +45,13 @@ function targetModel(options: QueryOptions) {
  *   (a transaction opened on shard A is never used on shard B);
  * - foreign transaction: a control-plane query never joins a tenant transaction and the other way
  *   round, because they may be different databases.
- * And inside an HTTP request, every statement carries the request's tag (`request/query-tag.ts`) and the database
- * is remembered, so an aborted request's queries can be cancelled there.
+ * And inside an HTTP request the database is remembered, so an aborted request's statements (tagged by
+ * `request/query-tag.ts`) can be cancelled there.
  */
 export function installQueryGuards(sequelize: Sequelize, dbKey: string, onQuery?: () => void): void {
   sequelize.addHook('beforeQuery' as never, ((options: QueryOptions, query: QueryLike) => {
     onQuery?.();
     countQuery();
-    tagRequestQueries(query?.connection);
     currentWork()?.touched(dbKey, sequelize);
     const mark = txMark(options.transaction);
     const model = targetModel(options);

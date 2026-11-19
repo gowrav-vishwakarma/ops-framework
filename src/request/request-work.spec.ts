@@ -9,7 +9,7 @@ import { ErrorAnswerFilter } from '../database-errors.js';
 import { CANCEL_TAGGED_SQL, cancelPattern, cancelTagged, queryTag } from './cancel-queries.js';
 import { IdempotencyStore, type IdempotencyRedis } from './idempotency-store.js';
 import { canonicalJson, idempotencyScope, requestHash } from './idempotency.interceptor.js';
-import { RequestAbortedError, tagRequestQueries } from './query-tag.js';
+import { installQueryTag, RequestAbortedError } from './query-tag.js';
 import { ClientGone, currentWork, RequestTimedOut, RequestWork, requestSignal, slotMs, startRequestWork } from './request-work.js';
 import { routeWork, Slot } from './slot.js';
 
@@ -38,19 +38,19 @@ function inRequest<T>(method: string, work: (ctx: { work: RequestWork; res: Fake
   });
 }
 
-/** A pg client that answers every statement after `ms`, recording the text it was sent. */
-function fakeClient(ms = 0) {
+/** Sequelize's Postgres query class as the patch sees it: `run` answers after `ms`, recording the text it was sent. */
+function fakeQuery(ms = 0) {
   const sent: string[] = [];
-  const client = {
-    query(config: unknown, ...rest: unknown[]) {
-      const callback = rest.pop() as (error: unknown, result?: unknown) => void;
-      sent.push(typeof config === 'string' ? config : (config as { text: string }).text);
-      setTimeout(() => callback(null, { rows: [] }), ms);
-    },
-  };
-  tagRequestQueries(client);
-  const run = (sql: string) => new Promise((resolve, reject) => client.query(sql, (error: unknown, result: unknown) => (error ? reject(error) : resolve(result))));
-  return { sent, run };
+  class FakeQuery {
+    async run(sql: string) {
+      sent.push(sql);
+      await new Promise((resolve) => setTimeout(resolve, ms));
+      return [];
+    }
+  }
+  installQueryTag(FakeQuery);
+  const run = (sql: string) => new FakeQuery().run(sql);
+  return { sent, run, FakeQuery };
 }
 
 afterEach(() => {
@@ -182,7 +182,7 @@ describe('the step runner stops on abort', () => {
 
 describe('query tags', () => {
   it("inside a request every statement starts with the request's tag; outside one nothing changes", async () => {
-    const pg = fakeClient();
+    const pg = fakeQuery();
     await inRequest('GET', async () => {
       await pg.run('SELECT 1');
       await pg.run('INSERT INTO t VALUES (1)');
@@ -193,7 +193,7 @@ describe('query tags', () => {
 
   it("a transaction's start carries SET LOCAL statement_timeout of the slot's time left (never a session SET)", async () => {
     vi.useFakeTimers();
-    const pg = fakeClient();
+    const pg = fakeQuery();
     await inRequest('POST', async ({ work }) => {
       work.declare({ slot: 'medium' }, { slots: { medium: 120_000 } });
       vi.advanceTimersByTime(20_000);
@@ -205,25 +205,40 @@ describe('query tags', () => {
     expect(pg.sent.join()).not.toMatch(/(^|;\s*)SET statement_timeout/);
   });
 
-  it('a client is wrapped once however often the hook sees it; outside a request its statements go as they are', async () => {
-    const pg = fakeClient();
-    const client = { query: (...args: unknown[]) => (args.pop() as (e: unknown, r: unknown) => void)(null, { rows: [] }) };
-    tagRequestQueries(client);
-    const wrapped = client.query;
-    tagRequestQueries(client);
-    expect(client.query).toBe(wrapped);
+  it('Query.run is patched once however often it is installed; outside a request its statements go as they are', async () => {
+    const pg = fakeQuery();
+    const patched = pg.FakeQuery.prototype.run;
+    installQueryTag(pg.FakeQuery);
+    expect(pg.FakeQuery.prototype.run).toBe(patched);
     await pg.run('SELECT 1');
     expect(pg.sent).toEqual(['SELECT 1']);
   });
 
+  it('the tag says who sent it: the request, its company, and inside a step the operation and step file; a */ in a value cannot end it', async () => {
+    const pg = fakeQuery();
+    await inRequest('POST', async ({ work }) => {
+      await pg.run('SELECT 1');
+      await work.within('Payment.create', 'save/510-after-post-ledger.ts', () => pg.run('SELECT 2'));
+      await work.within('Odd.x', 'a*/b.ts', () => pg.run('SELECT 3'));
+      await pg.run('SELECT 4');
+    });
+    expect(pg.sent).toEqual([
+      '/* r:a1b2c3d4 */ SELECT 1',
+      '/* r:a1b2c3d4 op:Payment.create step:save/510-after-post-ledger.ts */ SELECT 2',
+      '/* r:a1b2c3d4 op:Odd.x step:a* /b.ts */ SELECT 3',
+      '/* r:a1b2c3d4 */ SELECT 4',
+    ]);
+    expect(queryTag('ab12', { companyId: 7, op: 'Payment.create' })).toBe('/* r:ab12 c:7 op:Payment.create */ ');
+  });
+
   it('two requests at once each tag their own statements', async () => {
-    const pg = fakeClient(5);
+    const pg = fakeQuery(5);
     await Promise.all([inRequest('GET', () => pg.run('SELECT 1'), 'aaaa'), inRequest('GET', () => pg.run('SELECT 2'), 'bbbb')]);
     expect(pg.sent.sort()).toEqual(['/* r:aaaa */ SELECT 1', '/* r:bbbb */ SELECT 2']);
   });
 
   it('once aborted, a new statement is refused (with the reason) but a rollback still goes; statements running are counted', async () => {
-    const pg = fakeClient(20);
+    const pg = fakeQuery(20);
     await inRequest('GET', async ({ work }) => {
       const running = pg.run('SELECT pg_sleep(1)');
       expect(work.inFlight).toBe(1);
@@ -247,12 +262,14 @@ describe('cancel by tag', () => {
     const asked: Array<{ sql: string; bind: unknown }> = [];
     const sequelize = { query: async (sql: string, options: { bind: unknown }) => (asked.push({ sql, bind: options.bind }), [{ cancelled: true }]) };
     expect(await cancelTagged(sequelize as never, 'a1b2c3d4')).toBe(1);
-    expect(asked).toEqual([{ sql: CANCEL_TAGGED_SQL, bind: ['/* r:a1b2c3d4 */%'] }]);
+    expect(asked).toEqual([{ sql: CANCEL_TAGGED_SQL, bind: ['/* r:a1b2c3d4 %'] }]);
     expect(CANCEL_TAGGED_SQL).toContain('pid <> pg_backend_pid()');
     const pattern = cancelPattern('a1b2c3d4');
     expect(like(`${queryTag('a1b2c3d4')}SELECT pg_sleep(5)`, pattern)).toBe(true);
+    expect(like(`${queryTag('a1b2c3d4', { companyId: 1, op: 'Brand.list', step: 'list/410-before-sleep.ts' })}SELECT pg_sleep(5)`, pattern)).toBe(true);
     // Another request's statements, one whose id starts the same, and untagged ones are left alone.
     expect(like(`${queryTag('a1b2c3d4ff')}SELECT pg_sleep(5)`, pattern)).toBe(false);
+    expect(like(`${queryTag('a1b2c3d4ff', { companyId: 1 })}SELECT pg_sleep(5)`, pattern)).toBe(false);
     expect(like(`${queryTag('ffff0000')}SELECT pg_sleep(5)`, pattern)).toBe(false);
     expect(like('SELECT pg_sleep(5) /* r:a1b2c3d4 */', pattern)).toBe(false);
     expect(() => cancelPattern("x' OR 1=1 --")).toThrow(/Bad request id/);
@@ -362,5 +379,17 @@ describe('idempotency store', () => {
     expect(requestHash({ body: { a: 1, b: 2 } })).toBe(requestHash({ body: { b: 2, a: 1 }, query: {} }));
     expect(requestHash({ body: { a: 1 } })).not.toBe(requestHash({ body: { a: 2 } }));
     expect(requestHash({ body: { a: 1 }, query: { confirm: 'true' } })).not.toBe(requestHash({ body: { a: 1 } }));
+  });
+
+  it('an upload is compared by its field, name, size and content: another file with the same key is another save', () => {
+    const file = (fieldname: string, name: string, text: string) => ({ fieldname, originalname: name, size: text.length, buffer: Buffer.from(text) });
+    const body = { name: 'Asha' };
+    const pan = file('panFile', 'pan.pdf', '%PDF one');
+    const aadhar = file('aadharFile', 'a.pdf', '%PDF two');
+    expect(requestHash({ body, files: [pan, aadhar] })).toBe(requestHash({ body, files: [aadhar, pan] }));
+    expect(requestHash({ body, files: { panFile: [pan] } })).toBe(requestHash({ body, files: [pan] }));
+    expect(requestHash({ body, files: [pan] })).not.toBe(requestHash({ body, files: [file('panFile', 'pan.pdf', '%PDF 0ne')] }));
+    expect(requestHash({ body, files: [pan] })).not.toBe(requestHash({ body, files: [file('panFile', 'other.pdf', '%PDF one')] }));
+    expect(requestHash({ body, files: [pan] })).not.toBe(requestHash({ body }));
   });
 });

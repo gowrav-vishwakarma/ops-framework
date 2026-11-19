@@ -39,7 +39,7 @@ import type { JsonColumns } from './json-columns.js';
 import { limitsFor, runBuiltInChecks, startStateReason, type BuiltInChecks } from './row-checks.js';
 import { guardsFor, RowGuardRegistry, type RowGuard } from './row-guard.js';
 import { runAsOperation, type OperationAccess } from './write-guard.js';
-import type { SlotName } from '../request/request-work.js';
+import { currentWork, type SlotName } from '../request/request-work.js';
 
 export type { Attrs, EntityFlow };
 
@@ -912,7 +912,7 @@ export abstract class CrudService<
       await original();
     };
     if (!execute) return builtIn();
-    await this.annotate(execute, () => execute.impl.run(c as never, builtIn));
+    await this.annotate(execute, () => execute.impl.run(c as never, builtIn), c.op);
   }
 
   /** The phase's steps in file order; an aborted request (client gone on a read, slot over) stops before the next one. */
@@ -929,11 +929,13 @@ export abstract class CrudService<
     await this.annotate(loaded, () => loaded.impl[loaded.phase]!(c as never), c.op);
   }
 
+  /** Runs a step file (named in its statements' tags inside a request); an unexpected error names the file. */
   private async annotate(loaded: LoadedStep | LoadedExecute, work: () => Promise<void>, op?: string): Promise<void> {
     const trace = TRACE || this.frameworkOptions?.logging?.steps === true;
     const started = trace ? performance.now() : 0;
+    const request = op ? currentWork() : undefined;
     try {
-      await work();
+      await (request ? request.within(`${this.model.name}.${op}`, loaded.file, work) : work());
     } catch (error) {
       if (error instanceof HttpException || !(error instanceof Error)) throw error;
       const source = this.opsDir ? sourceOf(this.opsDir, loaded.file) : loaded.file;

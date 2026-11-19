@@ -133,4 +133,4 @@ export { installQueryCapture, queryShape } from './logging/query-capture.js';
 // Requests: abort signal (client gone on a read, time slot over), time slots, idempotent saves
 export { Slot } from './request/slot.js';
 export { ClientGone, DEFAULT_SLOTS, RequestTimedOut, requestSignal, slotMs, type RequestOptions, type SlotName, type WorkDeclaration } from './request/request-work.js';
-export { IDEMPOTENCY_HEADER, REPLAYED_HEADER } from './request/idempotency.interceptor.js';
+export { IDEMPOTENCY_HEADER, IdempotencyInterceptor, REPLAYED_HEADER } from './request/idempotency.interceptor.js';

@@ -11,7 +11,7 @@ import {
   type ExecutionContext,
   type NestInterceptor,
 } from '@nestjs/common';
-import { HTTP_CODE_METADATA } from '@nestjs/common/constants.js';
+import { HTTP_CODE_METADATA, INTERCEPTORS_METADATA } from '@nestjs/common/constants.js';
 import { catchError, from, mergeMap, of, switchMap, throwError, type Observable } from 'rxjs';
 import { FRAMEWORK_OPTIONS, type FrameworkOptions } from '../options.js';
 import { IdempotencyStore } from './idempotency-store.js';
@@ -34,8 +34,21 @@ interface KeyedRequest {
   headers: Record<string, string | string[] | undefined>;
   body?: unknown;
   query?: unknown;
+  /** Uploaded files (multer): a list, or lists by field. */
+  files?: UploadedFile[] | Record<string, UploadedFile[]>;
   user?: { id?: number; companyId?: number | null };
 }
+
+/** A file multer parsed from a multipart save. */
+interface UploadedFile {
+  fieldname: string;
+  originalname?: string;
+  size?: number;
+  buffer?: Buffer;
+}
+
+/** The request was seen by an idempotency interceptor already (the global one, before a route's own). */
+const SEEN = Symbol('framework.idempotencySeen');
 
 /** JSON with every object's keys sorted: the same body in another key order is the same body. */
 export function canonicalJson(value: unknown): string {
@@ -45,9 +58,17 @@ export function canonicalJson(value: unknown): string {
   return `{${entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`).join(',')}}`;
 }
 
-/** What a save with a key is compared by: its body and its query (`confirm`, filters). */
-export function requestHash(req: Pick<KeyedRequest, 'body' | 'query'>): string {
-  return createHash('sha256').update(canonicalJson({ body: req.body ?? null, query: req.query ?? {} })).digest('hex');
+/** Each uploaded file as its field, name, size and a hash of its content, in a stable order. */
+function filesDigest(files: KeyedRequest['files']): string[] {
+  const list = Array.isArray(files) ? files : Object.values(files ?? {}).flat();
+  return list
+    .map((file) => [file.fieldname, file.originalname ?? '', file.size ?? file.buffer?.length ?? 0, file.buffer ? createHash('sha256').update(file.buffer).digest('hex') : ''].join(':'))
+    .sort();
+}
+
+/** What a save with a key is compared by: its body, its query (`confirm`, filters) and its uploaded files. */
+export function requestHash(req: Pick<KeyedRequest, 'body' | 'query' | 'files'>): string {
+  return createHash('sha256').update(canonicalJson({ body: req.body ?? null, query: req.query ?? {}, files: filesDigest(req.files) })).digest('hex');
 }
 
 /** Whose key it is: company, user, method and path, then the key (one user's key never touches another's save). */
@@ -60,7 +81,9 @@ export function idempotencyScope(prefix: string, req: KeyedRequest, key: string)
  * Idempotent saves: a write (create, update, delete, a write action) sent with `Idempotency-Key` runs once per key.
  * The same key with the same body answers the first save's answer again (`Idempotent-Replayed: true`); while the
  * first still runs, 409 `save_in_progress`; with another body, 422 `idempotency_key_reused`; a failed first save
- * frees its key. No key: as without this. No Redis (`FrameworkOptions.idempotency.redis`): keys are ignored, logged
+ * frees its key. A route that parses uploads in its own interceptor lists this one after it
+ * (`UseInterceptors(AnyFilesInterceptor(), IdempotencyInterceptor, …)`): the global one then leaves the request to it,
+ * so the files are compared too. No key: as without this. No Redis (`FrameworkOptions.idempotency.redis`): keys are ignored, logged
  * once; Redis unreachable: the save runs without the check, logged once per outage.
  */
 @Injectable()
@@ -79,7 +102,10 @@ export class IdempotencyInterceptor implements NestInterceptor {
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
     if (context.getType() !== 'http') return next.handle();
-    const req = context.switchToHttp().getRequest<KeyedRequest>();
+    const req = context.switchToHttp().getRequest<KeyedRequest & { [SEEN]?: boolean }>();
+    const first = !req[SEEN];
+    req[SEEN] = true;
+    if (first && this.declaredByRoute(context)) return next.handle();
     const raw = req.headers[IDEMPOTENCY_HEADER.toLowerCase()];
     const key = Array.isArray(raw) ? raw[0] : raw;
     const work = currentWork();
@@ -113,6 +139,12 @@ export class IdempotencyInterceptor implements NestInterceptor {
         );
       }),
     );
+  }
+
+  /** The route runs this check itself, after its own interceptors (a file upload's). */
+  private declaredByRoute(context: ExecutionContext): boolean {
+    const listed = [context.getHandler(), context.getClass()].flatMap((target) => (Reflect.getMetadata(INTERCEPTORS_METADATA, target) ?? []) as unknown[]);
+    return listed.includes(IdempotencyInterceptor);
   }
 
   /** A Redis call; when Redis cannot be reached, undefined (the save goes on unchecked), logged once per outage. */

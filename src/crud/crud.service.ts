@@ -501,6 +501,29 @@ export abstract class CrudService<
     return checkPayload(dto, payload ?? {}, { endpoint: `${this.label} ${op}`, mode: options?.strict ?? 'off', refuse: options?.refuse }) as T;
   }
 
+  /**
+   * What the resource's endpoints take, for the contract (`collectRoutes`): each operation's own `dto.ts`, each action
+   * with its kind and payload class (`dto.ts` or `input:`), its named lists, views and lookups.
+   */
+  payloadContract(): {
+    label: string;
+    dtos: Record<string, Type<object>>;
+    actions: Array<{ name: string; label: string; kind: 'row' | 'bulk' | 'collection'; input?: Type<object> }>;
+    lists: string[];
+    views: string[];
+    lookups: string[];
+  } {
+    const names = this.ops.names();
+    return {
+      label: this.label,
+      dtos: Object.fromEntries(this.ops.dtoFolders().map((op) => [op, this.ops.dto(op)!.dto])),
+      actions: this.actionList.map((action) => ({ name: action.name, label: action.label, kind: action.kind ?? 'row', input: this.ops.dto(action.name)?.dto ?? action.input })),
+      lists: names.filter((n) => n.startsWith('list-')).map((n) => n.slice(5)),
+      views: names.filter((n) => n.startsWith('view-')).map((n) => n.slice(5)),
+      lookups: Object.keys(this.lookups),
+    };
+  }
+
   // ---- writes ---------------------------------------------------------------------------
 
   private writeChecks(op: string, label: string): BuiltInChecks<M> {

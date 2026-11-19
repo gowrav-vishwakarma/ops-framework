@@ -83,5 +83,8 @@
     "sequelize-typescript": "^2.1.6",
     "typescript": "^6.0.2",
     "vitest": "^4.1.2"
+  },
+  "dependencies": {
+    "class-validator-jsonschema": "^5.2.0"
   }
 }

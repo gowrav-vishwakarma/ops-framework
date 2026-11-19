@@ -3,6 +3,7 @@ import type { Grant } from '../acl/acl.service.js';
 import type { ReqCtx } from '../auth/auth-user.js';
 import { AdminRoutes, Ctx, RequirePermission } from '../auth/decorators.js';
 import { ListQueryDto } from './list-query.dto.js';
+import { CRUD_ROUTE, PAYLOAD_FALLBACK } from '../payload/route-meta.js';
 import { LookupQueryDto } from './lookup.js';
 
 export interface CrudRoutes<S> {
@@ -163,6 +164,10 @@ export function crudController<S extends object>(
   Reflect.defineMetadata('design:paramtypes', [Object, Number, String], proto, 'view');
   Reflect.defineMetadata('design:paramtypes', [Object, String, Object], proto, 'actAll');
   Reflect.defineMetadata('design:paramtypes', [Object, Number, Object, String], proto, 'update');
+  // For the contract: the classes behind the Object-typed bodies, and the routes that expand per operation.
+  Reflect.defineMetadata(PAYLOAD_FALLBACK, options.create, proto, 'create');
+  Reflect.defineMetadata(PAYLOAD_FALLBACK, options.update, proto, 'update');
+  for (const kind of ['create', 'update', 'list', 'act', 'actAll', 'view', 'lookup'] as const) Reflect.defineMetadata(CRUD_ROUTE, kind, proto, kind);
 
   if (options.plane === 'control') AdminRoutes()(CrudBase);
   return CrudBase as unknown as Type<CrudRoutes<S>>;

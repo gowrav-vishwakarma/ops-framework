@@ -237,7 +237,9 @@ type, missing required, not in the allowed list, a company named); 422 a well-fo
 A global filter (`ErrorAnswerFilter`, `database-errors.ts`) answers every error:
 - an `HttpException` (payload 400, issues 422/409, `NotFoundException`...) as thrown;
 - a database refusal as something the user can act on (`databaseErrorAnswer`): unique → 422
-  `<field> already exists`; a link to a missing row → 422 on the field; a row still in use → 409
+  `<field> already exists`, or the app's own words for a constraint it names (`databaseErrors.unique` in the
+  framework options: `{ constraint: /name pattern/, field, message }`, 422 on that field; Ankpal: a voucher number
+  two saves took at once → "save again"); a link to a missing row → 422 on the field; a row still in use → 409
   `in_use`; required / too long / out of range / badly formed → 422 on the column; a statement
   timeout → 503; a deadlock or serialization conflict → 409 "try again";
 - anything else → 500 `{ message, reference }`. The SQL, the stack and the message stay in the log

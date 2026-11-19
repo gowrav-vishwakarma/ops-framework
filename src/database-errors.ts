@@ -1,8 +1,9 @@
-import { ArgumentsHost, Catch, ConflictException, HttpException, Logger, ServiceUnavailableException, type ExceptionFilter } from '@nestjs/common';
+import { ArgumentsHost, Catch, ConflictException, HttpException, Inject, Logger, Optional, ServiceUnavailableException, type ExceptionFilter } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { Response } from 'express';
 import { BaseError, DatabaseError, ForeignKeyConstraintError, UniqueConstraintError, ValidationError } from 'sequelize';
 import { fieldErrors, type FieldErrors } from './errors.js';
+import { FRAMEWORK_OPTIONS, type FrameworkOptions, type UniqueAnswer } from './options.js';
 
 /** `accountGroupId` → `Account group`. */
 const label = (field: string) => {
@@ -12,12 +13,26 @@ const label = (field: string) => {
 
 type PgError = { code?: string; column?: string; constraint?: string; table?: string; detail?: string };
 
+/** The app's own answer for a unique constraint it named (`FrameworkOptions.databaseErrors.unique`): 422 on its field. */
+function namedUniqueAnswer(error: UniqueConstraintError, unique: readonly UniqueAnswer[]): HttpException | null {
+  const constraint = ((error.parent ?? {}) as PgError).constraint ?? '';
+  for (const rule of unique) {
+    const match = rule.constraint.exec(constraint);
+    if (!match) continue;
+    const field = typeof rule.field === 'function' ? rule.field(match) : rule.field;
+    return fieldErrors({ [field]: [rule.message] }, rule.message);
+  }
+  return null;
+}
+
 /**
  * A database refusal as an answer the user can act on (or nothing internal, with a reference to
  * find it in the log). `null`: not a database error.
  */
-export function databaseErrorAnswer(error: unknown): HttpException | null {
+export function databaseErrorAnswer(error: unknown, unique: readonly UniqueAnswer[] = []): HttpException | null {
   if (error instanceof UniqueConstraintError) {
+    const named = namedUniqueAnswer(error, unique);
+    if (named) return named;
     const fields = Object.keys(error.fields ?? {}).filter((f) => f !== 'companyId');
     const errors: FieldErrors = {};
     for (const field of fields.length ? fields : ['Error']) errors[field] = [`${fields.length ? label(field) : 'This record'} already exists`];
@@ -71,11 +86,16 @@ export function databaseErrorAnswer(error: unknown): HttpException | null {
 @Catch()
 export class ErrorAnswerFilter implements ExceptionFilter {
   private readonly logger = new Logger('Errors');
+  private readonly unique: readonly UniqueAnswer[];
+
+  constructor(@Optional() @Inject(FRAMEWORK_OPTIONS) options?: Pick<FrameworkOptions, 'databaseErrors'>) {
+    this.unique = options?.databaseErrors?.unique ?? [];
+  }
 
   catch(error: unknown, host: ArgumentsHost): void {
     const res = host.switchToHttp().getResponse<Response>();
     if (res.headersSent) return;
-    const known = error instanceof HttpException ? error : databaseErrorAnswer(error);
+    const known = error instanceof HttpException ? error : databaseErrorAnswer(error, this.unique);
     if (known) {
       if (!(error instanceof HttpException)) this.logger.warn(`${(error as Error).name}: ${(error as Error).message}`);
       res.status(known.getStatus()).json(known.getResponse());

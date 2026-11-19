@@ -11,6 +11,19 @@ describe('database refusals as answers', () => {
     expect(body(new UniqueConstraintError({ fields: { name: 'Freight', companyId: 1 } } as never))).toEqual({ message: 'A record with these values already exists', errors: { name: ['Name already exists'] } });
   });
 
+  it("a unique constraint the app names answers in the app's words, on its field; others stay generic", () => {
+    const unique = [{ constraint: /^[A-Za-z]+_company_fy_([A-Za-z]+)_unique$/, field: (m: RegExpExecArray) => m[1]!, message: 'Number just taken: save again' }];
+    const refused = (constraint: string) => new UniqueConstraintError({ parent: pg({ code: '23505', constraint }), fields: { companyId: 1, financialYear: '2026-27', invoiceNumber: 'SI-1' } } as never);
+    expect((databaseErrorAnswer(refused('SalesInvoices_company_fy_invoiceNumber_unique'), unique) as HttpException).getResponse()).toEqual({ message: 'Number just taken: save again', errors: { invoiceNumber: ['Number just taken: save again'] } });
+    expect((databaseErrorAnswer(refused('other_unique'), unique) as HttpException).getResponse()).toMatchObject({ message: 'A record with these values already exists' });
+    const answers: Array<{ status: number; json: unknown }> = [];
+    const res = { headersSent: false, status: (status: number) => ({ json: (json: unknown) => answers.push({ status, json }) }) };
+    const filter = new ErrorAnswerFilter({ databaseErrors: { unique } });
+    vi.spyOn((filter as unknown as { logger: { warn: () => void } }).logger, 'warn').mockImplementation(() => undefined);
+    filter.catch(refused('Receipts_company_fy_receiptNo_unique'), { switchToHttp: () => ({ getResponse: () => res }) } as never);
+    expect(answers).toEqual([{ status: 422, json: { message: 'Number just taken: save again', errors: { receiptNo: ['Number just taken: save again'] } } }]);
+  });
+
   it('a link to a missing row names the field; a row in use cannot be removed', () => {
     const missing = new ForeignKeyConstraintError({ parent: pg({ detail: 'Key (accountGroupId)=(99) is not present in table "AccountGroups".' }) } as never);
     expect(body(missing)).toEqual({ message: 'Please fix the highlighted fields', errors: { accountGroupId: ['The chosen account group does not exist'] } });

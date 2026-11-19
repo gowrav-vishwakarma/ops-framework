@@ -31,8 +31,9 @@ describe('framework package boundary', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('runtime code imports only node built-ins and declared peer dependencies', () => {
-    const allowed = new Set(Object.keys(pkg.peerDependencies));
+  it('runtime code imports only node built-ins and declared (peer) dependencies', () => {
+    // Peers: one instance shared with the app (Nest, Sequelize…). Dependencies: the package's own libraries (the contract's schema converter).
+    const allowed = new Set([...Object.keys(pkg.peerDependencies), ...Object.keys(pkg.dependencies ?? {})]);
     const offenders: string[] = [];
     for (const file of sources(SRC).filter((f) => !f.endsWith('.spec.ts') && !f.includes('/testing/'))) {
       for (const spec of importsOf(file).filter((s) => !s.startsWith('.') && !s.startsWith('node:'))) {

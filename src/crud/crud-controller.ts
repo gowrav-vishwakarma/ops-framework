@@ -126,13 +126,22 @@ export function crudController<S extends object>(
     @Post()
     @RequirePermission(resource, 'create')
     create(@Ctx() ctx: ReqCtx, @Body() dto: object, @Query('confirm') confirm?: string) {
-      return (this.service as AnyService).create(ctx, dto, undefined, confirm === 'true');
+      return (this.service as AnyService).create(ctx, this.body('create', dto, options.create), undefined, confirm === 'true');
+    }
+
+    /**
+     * The body of a create or update: an operation with its own `dto.ts` is checked by the service (every caller); one
+     * without is held here to the class the controller was built with, in the same strictness.
+     */
+    protected body(op: 'create' | 'update', dto: object, fallback: Type<object>): object {
+      const service = this.service as AnyService;
+      return service.hasPayloadDto(op) ? dto : service.checkedPayload(op, dto, fallback);
     }
 
     @Patch(':id')
     @RequirePermission(resource, 'update')
     update(@Ctx() ctx: ReqCtx, @Param('id', ParseIntPipe) id: number, @Body() dto: object, @Query('confirm') confirm?: string) {
-      return (this.service as AnyService).update(ctx, id, dto, undefined, confirm === 'true');
+      return (this.service as AnyService).update(ctx, id, this.body('update', dto, options.update), undefined, confirm === 'true');
     }
 
     @Delete(':id')
@@ -146,13 +155,14 @@ export function crudController<S extends object>(
   const proto = CrudBase.prototype;
   Reflect.defineMetadata('design:paramtypes', [Object, options.query ?? ListQueryDto], proto, 'list');
   Reflect.defineMetadata('design:paramtypes', [Object, String, LookupQueryDto, Object], proto, 'lookup');
-  Reflect.defineMetadata('design:paramtypes', [Object, options.create, String], proto, 'create');
+  // Bodies typed Object: the global pipe leaves them, `body()` holds them to their class (or the operation's dto.ts).
+  Reflect.defineMetadata('design:paramtypes', [Object, Object, String], proto, 'create');
   Reflect.defineMetadata('design:paramtypes', [Object, Number, String, Object], proto, 'act');
   Reflect.defineMetadata('design:paramtypes', [Object, Number], proto, 'history');
   Reflect.defineMetadata('design:paramtypes', [Object, Number, String, String], proto, 'get');
   Reflect.defineMetadata('design:paramtypes', [Object, Number, String], proto, 'view');
   Reflect.defineMetadata('design:paramtypes', [Object, String, Object], proto, 'actAll');
-  Reflect.defineMetadata('design:paramtypes', [Object, Number, options.update, String], proto, 'update');
+  Reflect.defineMetadata('design:paramtypes', [Object, Number, Object, String], proto, 'update');
 
   if (options.plane === 'control') AdminRoutes()(CrudBase);
   return CrudBase as unknown as Type<CrudRoutes<S>>;
@@ -174,6 +184,8 @@ interface AnyService {
   perform(ctx: ReqCtx, id: number, name: string, input: Record<string, unknown>): Promise<unknown>;
   performAction(ctx: ReqCtx, name: string, body: Record<string, unknown>): Promise<unknown>;
   view(ctx: ReqCtx, id: number, name: string): Promise<unknown>;
+  hasPayloadDto(op: string): boolean;
+  checkedPayload<T>(op: string, payload: T, fallback?: Type<object>): T;
 }
 
 export interface LookupRoutes<S> {

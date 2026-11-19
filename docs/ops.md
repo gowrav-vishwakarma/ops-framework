@@ -36,6 +36,24 @@ Create, update, and delete use the same order. Their main change is built in: `c
 
 An unknown folder, a bad file name, a number in the wrong band, or two files with the same number fails boot. `save` shares its numbers with `create` and `update`. `list` shares its numbers with `list-<view>`.
 
+## The payload: `dto.ts`
+
+Each operation's payload sits in its folder as `dto.ts`, next to the steps that read it, so a person reading the folder sees what the endpoint takes:
+
+```
+ops/save/dto.ts        body of POST / and PATCH /:id
+ops/update/dto.ts      only when update takes something other than save
+ops/cancel/dto.ts      the cancel action's body
+ops/list/dto.ts        GET / query (a list-<view> falls back to it)
+```
+
+- `export default` the payload class, written with class-validator (nested lines with `@ValidateNested` + `@Type`). Shapes shared by several operations go to `ops/_shared/`.
+- `create` and `update` fall back to `save/dto.ts`. Views, lookups and `delete` take no payload: a `dto.ts` there fails boot. An action with both `input:` (actions file) and `dto.ts` fails boot; keep the `dto.ts`.
+- The payload is checked before any step, on every call of the service's `create`, `update`, `perform` and `performAction` (internal callers too). Steps get the class instance as `c.dto`. `confirm` (accept warnings) is the framework's own flag, never a payload field.
+- How strictly: `payloads.strict` in the framework options. `off` (default) drops unknown fields silently; `warn` drops and reports them (logged once per endpoint and field, listed by `payloadWarnings()`), to see what clients send before the switch; `error` refuses them like any wrong field. Missing, mistyped and out-of-list fields are refused in every mode, all together (422 field errors, or `payloads.refuse`).
+- Without a `dto.ts`, a `crudController` create / update is held to the controller's `create` / `update` class the same way, and an action to its `input:` class (with `off`, as before: unknown fields kept).
+- Hand-written controllers: use `PayloadPipe` as the app's global pipe (`new PayloadPipe(strict, refuse)`). It holds bodies and queries typed with a class to it; bodies typed `Object` (a `Record`, an interface) pass untouched, so give every body a class.
+
 ## Step files
 
 ```
@@ -49,7 +67,7 @@ ops/deactivate/010-check-assess-open-work.ts
 - `500-execute.ts` (or `500-execute-<name>.ts`) — always number 500, at most one per operation. Replaces the main change. See below.
 - `NNN-after-name.ts` — 501 to 999. The main change is done, still inside the transaction.
 - The number is the only order. There is no priority field. In the IDE file tree the folder reads top to bottom in run order: checks, befores, `500-execute.ts`, afters.
-- A step file may be a flow (data) or code (see *Flows*). `_state.ts` and `_shared/` are helpers. The loader ignores other files that do not start with a number, and folders of `ops/` starting with `_` (`ops/_shared/`, an example kept beside the real operation).
+- A step file may be a flow (data) or code (see *Flows*). `dto.ts` is the operation's payload (see *The payload*). `_state.ts` and `_shared/` are helpers. The loader ignores other files that do not start with a number, and folders of `ops/` starting with `_` (`ops/_shared/`, an example kept beside the real operation).
 
 A step is the default export. A plain object needs nothing injected:
 
@@ -172,7 +190,7 @@ Declared in `<module>.actions.ts`. Each action is a permission: `branch.deactiva
 - **`bulk`** — `POST /actions/:name` with `{ ids }`. Every record is checked first and blockers come back per record. Then before, the main change, and after run per record, in one transaction.
 - **`collection`** — `POST /actions/:name`, no record. Use `collectionStep`, and `runCollection` or `collectionExecute`. Set `c.result` for the response.
 
-`input: SomeDto` validates the body with class-validator before the steps. An input that fails (or a required `inputs` field left empty) is refused with 422 field errors before the check steps run, so steps may rely on `c.dto` having its fields and types (as a create's DTO, validated before any step). `inputs` is the separate list the UI uses to draw the dialog.
+`ops/<name>/dto.ts` (see *The payload*), or `input: SomeDto` in the actions file, validates the body with class-validator before the steps. An input that fails (or a required `inputs` field left empty) is refused with 422 field errors before the check steps run, so steps may rely on `c.dto` having its fields and types (as a create's DTO, validated before any step). `inputs` is the separate list the UI uses to draw the dialog.
 
 The row menu shows `row` actions only.
 

@@ -6,6 +6,8 @@ import type { ScopeDef } from './acl/scopes.js';
 import type { TenantRef } from './tenancy/context.js';
 import type { PartitionConfig } from './tenancy/partition.js';
 import type { LoggingOptions } from './logging/request-log.js';
+import type { FieldErrors } from './errors.js';
+import type { PayloadStrictness } from './payload/check-payload.js';
 
 export const FRAMEWORK_OPTIONS = Symbol('FRAMEWORK_OPTIONS');
 
@@ -158,6 +160,12 @@ export interface FrameworkOptions {
     /** Admin token lifetime. Default `8h`. */
     tokenTtl?: string;
   };
+  /**
+   * Request payloads held to their DTO (an operation's `dto.ts`, a controller's class through `PayloadPipe`).
+   * `strict` (default `off`): `warn` reports unknown fields, `error` refuses them (see `PayloadStrictness`).
+   * `refuse` turns field errors into the app's answer (default: `fieldErrors`).
+   */
+  payloads?: { strict?: PayloadStrictness; refuse?: (errors: FieldErrors) => Error };
   /** Service contracts between deployments (see `services/`). */
   services?: {
     /**

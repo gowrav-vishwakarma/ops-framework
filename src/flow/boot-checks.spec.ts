@@ -117,6 +117,25 @@ describe('the ops loader', () => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
+  it('dto.ts: the payload class of its operation; create and update fall back to save, a list view to list', async () => {
+    const ops = await loadOps(
+      opsRoot({ 'save/dto.ts': 'export default class SaveDto {}\n', 'update/dto.ts': 'export default class UpdateDto {}\n', 'list/dto.ts': 'export default class ListDto {}\n', 'list-open/410-before-open.ts': source("({ before: async () => {} })") }),
+      {} as ModuleRef,
+      ['cancel'],
+    );
+    expect(ops.dto('create')?.dto.name).toBe('SaveDto');
+    expect(ops.dto('update')?.dto.name).toBe('UpdateDto');
+    expect(ops.dto('list-open')).toMatchObject({ file: 'list/dto.ts' });
+    expect(ops.dto('cancel')).toBeUndefined();
+    expect(ops.dtoFolders().sort()).toEqual(['list', 'save', 'update']);
+  });
+
+  it('dto.ts must export its class, and only writes, actions and lists take one', async () => {
+    await expect(load(opsRoot({ 'save/dto.ts': 'export const X = 1;\n' }))).rejects.toThrow(/save\/dto.ts: must `export default` the payload class/);
+    await expect(load(opsRoot({ 'view-print/dto.ts': 'export default class P {}\n' }))).rejects.toThrow(/view-print\/dto.ts: only writes, actions and lists take a payload/);
+    await expect(load(opsRoot({ 'delete/dto.ts': 'export default class D {}\n' }))).rejects.toThrow(/delete\/dto.ts: only writes, actions and lists take a payload/);
+  });
+
   it('an unnumbered flow.ts fails boot', async () => {
     await expect(load(opsRoot({ 'save/flow.ts': source('flow({ steps: [] })') }))).rejects.toThrow(/save\/flow.ts: flows are numbered like every step file: NNN-check\|before\|after-<name>.ts/);
   });

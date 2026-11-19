@@ -26,6 +26,12 @@ export interface LoadedExecute {
   impl: { run(c: never, original: () => Promise<void>): Promise<void>; describe?: string };
 }
 
+/** An operation's `dto.ts`: the payload its endpoint takes (body, or query for lists), checked before any step. */
+export interface LoadedDto {
+  file: string;
+  dto: Type<object>;
+}
+
 /** Folders every entity has. `save` holds steps shared by create and update; `list` those shared by all lists. */
 export const WRITE_OPS = ['save', 'create', 'update', 'delete', 'list'] as const;
 
@@ -45,7 +51,22 @@ export class OpsRegistry {
   constructor(
     private readonly folders: ReadonlyMap<string, LoadedStep[]> = new Map(),
     private readonly executes: ReadonlyMap<string, LoadedExecute> = new Map(),
+    private readonly dtos: ReadonlyMap<string, LoadedDto> = new Map(),
   ) {}
+
+  /**
+   * The operation's payload class (`<op>/dto.ts`): create and update fall back to `save/dto.ts`, a `list-<view>` to
+   * `list/dto.ts`.
+   */
+  dto(op: string): LoadedDto | undefined {
+    const shared = op === 'create' || op === 'update' ? 'save' : op.startsWith('list-') ? 'list' : null;
+    return this.dtos.get(op) ?? (shared ? this.dtos.get(shared) : undefined);
+  }
+
+  /** Every operation folder with its own `dto.ts`. */
+  dtoFolders(): string[] {
+    return [...this.dtos.keys()];
+  }
 
   /** The operation's `500-execute.ts`; create and update also look in `save/`. */
   execute(op: string): LoadedExecute | undefined {
@@ -82,7 +103,8 @@ const fail = (root: string, path: string, message: string): never => {
  * Reads `<root>/<operation>/NNN-<phase>-<name>.ts` files. Strict on purpose: a misnamed file,
  * a duplicate number, a number outside its phase's band, a step implementing the wrong phase,
  * or a folder that is no operation of this entity stops the app at boot instead of being skipped.
- * `500-execute.ts` (at most one per operation) replaces the operation's main change.
+ * `500-execute.ts` (at most one per operation) replaces the operation's main change; `dto.ts` is the payload the
+ * operation's endpoint takes (`export default` class), checked before any step.
  * Other files not starting with a digit and sub-folders are helpers (`_state.ts`, `_shared/`) and are left alone,
  * and so are folders of `ops/` starting with `_` (`ops/_shared/`).
  */
@@ -91,6 +113,7 @@ export async function loadOps(root: string | null, moduleRef: ModuleRef, actionN
   const allowed = new Set<string>([...WRITE_OPS, ...actionNames]);
   const folders = new Map<string, LoadedStep[]>();
   const executes = new Map<string, LoadedExecute>();
+  const dtos = new Map<string, LoadedDto>();
 
   for (const entry of readdirSync(root, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
@@ -102,6 +125,7 @@ export async function loadOps(root: string | null, moduleRef: ModuleRef, actionN
     const loaded = await loadFolder(root, entry.name, moduleRef, model);
     folders.set(entry.name, loaded.steps);
     if (loaded.execute) executes.set(entry.name, loaded.execute);
+    if (loaded.dto) dtos.set(entry.name, loaded.dto);
   }
   for (const own of ['create', 'update']) {
     if (executes.has('save') && executes.has(own)) fail(root, executes.get(own)!.file, 'save/500-execute.ts already replaces this write; keep one');
@@ -117,7 +141,7 @@ export async function loadOps(root: string | null, moduleRef: ModuleRef, actionN
       seen.set(loaded.number, loaded.file);
     }
   }
-  return new OpsRegistry(folders, executes);
+  return new OpsRegistry(folders, executes, dtos);
 }
 
 async function loadDefault(root: string, file: string, moduleRef: ModuleRef, what: string): Promise<object> {
@@ -126,13 +150,22 @@ async function loadDefault(root: string, file: string, moduleRef: ModuleRef, wha
   return typeof exported === 'function' ? moduleRef.create(exported as Type<object>) : (exported as object);
 }
 
-async function loadFolder(root: string, folder: string, moduleRef: ModuleRef, model?: FlowPlace['model']): Promise<{ steps: LoadedStep[]; execute?: LoadedExecute }> {
+async function loadFolder(root: string, folder: string, moduleRef: ModuleRef, model?: FlowPlace['model']): Promise<{ steps: LoadedStep[]; execute?: LoadedExecute; dto?: LoadedDto }> {
   const steps: LoadedStep[] = [];
   const byNumber = new Map<number, string>();
   let execute: LoadedExecute | undefined;
+  let dto: LoadedDto | undefined;
 
   for (const entry of readdirSync(join(root, folder), { withFileTypes: true })) {
     const name = entry.name;
+    if (!entry.isDirectory() && (name === 'dto.ts' || name === 'dto.js')) {
+      const file = `${folder}/${name}`;
+      if (folder.startsWith('view-') || folder.startsWith('lookup-') || folder === 'delete') fail(root, file, 'only writes, actions and lists take a payload');
+      const exported = ((await import(pathToFileURL(join(root, file)).href)) as { default?: unknown }).default;
+      if (typeof exported !== 'function') fail(root, file, 'must `export default` the payload class (class-validator decorators)');
+      dto = { file: file.replace(/\.js$/, '.ts'), dto: exported as Type<object> };
+      continue;
+    }
     if (!entry.isDirectory() && EXECUTE_FILE.test(name)) {
       const file = `${folder}/${name}`;
       if (READ_OP.test(folder)) fail(root, file, 'lists and views have no execute file; shape the query in before steps');
@@ -174,5 +207,5 @@ async function loadFolder(root: string, folder: string, moduleRef: ModuleRef, mo
 
     steps.push({ file: file.replace(/\.js$/, '.ts'), number, phase, impl });
   }
-  return { steps: steps.sort((a, b) => a.number - b.number), execute };
+  return { steps: steps.sort((a, b) => a.number - b.number), execute, dto };
 }

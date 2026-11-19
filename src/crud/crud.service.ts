@@ -1,5 +1,5 @@
 import { buildLookupFind, lookupParams, type LookupDef, type LookupQueryDto } from './lookup.js';
-import { BadRequestException, ForbiddenException, HttpException, Inject, Logger, NotFoundException, type OnModuleInit } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, HttpException, Inject, Logger, NotFoundException, type OnModuleInit, type Type } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
@@ -22,6 +22,7 @@ import { PermissionMeta } from '../acl/limits.js';
 import { allScope, resolveScopes, type ScopeDef, type ScopeRef } from '../acl/scopes.js';
 import type { Actor, ReqCtx } from '../auth/auth-user.js';
 import { flattenValidationErrors } from '../errors.js';
+import { checkPayload, payloadProblems } from '../payload/check-payload.js';
 import { FRAMEWORK_OPTIONS, type FrameworkOptions } from '../options.js';
 import { permissionDenied, permissionLabel } from '../acl/permission-denied.js';
 import { computeActionStates } from './action-states.js';
@@ -182,6 +183,10 @@ export abstract class CrudService<
     this.actionList = this.softDelete ? [...this.actions, restoreAction as unknown as EntityAction<M, U>] : this.actions;
     this.declarePermissions();
     this.ops = await loadOps(this.opsDir, this.moduleRef, this.actionList.map((action) => action.name), { name: this.model.name, attributes: Object.keys(this.model.getAttributes()) });
+    for (const action of this.actionList) {
+      const dto = this.ops.dto(action.name);
+      if (dto && action.input) throw new Error(`[ops] ${sourceOf(this.opsDir!, dto.file)}: ${this.label}'s action ${action.name} also declares \`input\`; keep one (the dto.ts)`);
+    }
   }
 
   /** Tells the role matrix which of this resource's permissions carry limits or stay hidden. */
@@ -477,6 +482,25 @@ export abstract class CrudService<
     for (const row of rows) row.setDataValue('_actions' as never, (await computeActionStates(env as never, ctx as never, row, granted, prepared)) as never);
   }
 
+  // ---- payloads -------------------------------------------------------------------------
+
+  /** Whether the operation has its own payload class (`<op>/dto.ts`, create and update falling back to `save/`). */
+  hasPayloadDto(op: string): boolean {
+    return Boolean(this.ops.dto(op));
+  }
+
+  /**
+   * A payload held to the operation's `dto.ts` (or `fallback`, a controller's class, when the operation has none) in
+   * the deployment's strictness (`payloads.strict`): the instance the steps get, or the refusal. Without either class,
+   * the payload as sent.
+   */
+  checkedPayload<T>(op: string, payload: T, fallback?: Type<object>): T {
+    const dto = this.ops.dto(op)?.dto ?? fallback;
+    if (!dto) return payload;
+    const options = this.frameworkOptions?.payloads;
+    return checkPayload(dto, payload ?? {}, { endpoint: `${this.label} ${op}`, mode: options?.strict ?? 'off', refuse: options?.refuse }) as T;
+  }
+
   // ---- writes ---------------------------------------------------------------------------
 
   private writeChecks(op: string, label: string): BuiltInChecks<M> {
@@ -484,6 +508,7 @@ export abstract class CrudService<
   }
 
   async create(ctx: ReqCtx<U>, dto: TCreate, outer?: Transaction, confirmed = false): Promise<unknown> {
+    dto = this.checkedPayload('create', dto);
     let result: unknown;
     const id = await this.inTx(outer, async (t) => {
       const values = await this.toCreate(ctx, dto, t);
@@ -502,6 +527,7 @@ export abstract class CrudService<
   }
 
   async update(ctx: ReqCtx<U>, id: number, dto: TUpdate, outer?: Transaction, confirmed = false): Promise<unknown> {
+    dto = this.checkedPayload('update', dto);
     let result: unknown;
     await this.inTx(outer, async (t) => {
       const row = await this.findOne(ctx, id, t, true);
@@ -792,7 +818,16 @@ export abstract class CrudService<
       }
     }
     let dto: unknown = input;
-    if (action.input) {
+    const loaded = this.ops.dto(action.name)?.dto;
+    const strict = this.frameworkOptions?.payloads?.strict ?? 'off';
+    if (loaded || (action.input && strict !== 'off')) {
+      // The action's payload: `confirm` is the framework's own flag (warnings accepted), never a field of it.
+      const { confirm: _confirm, ...payload } = input;
+      const checked = payloadProblems(loaded ?? action.input!, payload, { endpoint: `${this.label} ${action.name}`, mode: strict });
+      for (const [field, messages] of Object.entries(checked.errors)) for (const message of messages) issues.field(field, message);
+      dto = checked.instance;
+    } else if (action.input) {
+      // Strictness off and no dto.ts: the declared input class, unknown fields kept (as before payloads were held).
       dto = plainToInstance(action.input, input, { enableImplicitConversion: true });
       for (const [field, messages] of Object.entries(flattenValidationErrors(await validate(dto as object, { forbidUnknownValues: false })))) {
         for (const message of messages) issues.field(field, message);

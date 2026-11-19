@@ -10,6 +10,10 @@ export * from './options.js';
 export * from './naming.js';
 export * from './errors.js';
 export * from './dto.js';
+
+// Request payloads held to their DTO (an operation's dto.ts, a controller's class)
+export { checkPayload, payloadProblems, payloadWarnings, resetPayloadWarnings, type PayloadCheck, type PayloadStrictness } from './payload/check-payload.js';
+export { PayloadPipe } from './payload/payload-pipe.js';
 export * from './money.js';
 export { BULK_CHUNK, chunkedBulkCreate, installBulkCreateChunking } from './db/bulk-chunks.js';
 

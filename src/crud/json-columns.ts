@@ -319,7 +319,7 @@ export function applyJsonColumns(c: JsonColumnsTarget, columns: JsonColumns, sco
     const result = checkJson(shape, dto[column], { path: column, stored: c.before?.[column] });
     for (const problem of result.problems) c.issues.field(problem.path, problem.message);
     const unknown = [...result.dropped, ...result.kept];
-    if (options.strict === 'error') {
+    if (options.strict === 'error' && unknown.length) {
       // Strict: a key the shape does not name is refused, even one sent back unchanged (a new key needs the shape).
       for (const path of unknown) c.issues.field(path, `${path.split('.').pop()} is not a field of this payload`);
       continue;

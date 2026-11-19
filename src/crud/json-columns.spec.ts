@@ -174,6 +174,13 @@ describe('applyJsonColumns: unknown keys by payload strictness', () => {
     expect(c.issues.fields).toEqual({ 'section.junk': ['junk is not a field of this payload'], 'section.legacy': ['legacy is not a field of this payload'] });
     expect(values).toEqual({});
   });
+
+  it('error: a save with no unknown key is taken as usual (merged with merge)', () => {
+    const { c, values } = target({ section: { digits: 4 } }, { section: { enable: true, digits: 2 } });
+    applyJsonColumns(c, { section: Section }, 'Row', { strict: 'error', merge: true });
+    expect(c.issues.fields).toEqual({});
+    expect(values).toEqual({ section: { enable: true, digits: 4 } });
+  });
 });
 
 describe('mergeJson', () => {

@@ -498,7 +498,7 @@ export abstract class CrudService<
     const dto = this.ops.dto(op)?.dto ?? fallback;
     if (!dto) return payload;
     const options = this.frameworkOptions?.payloads;
-    return checkPayload(dto, payload ?? {}, { endpoint: `${this.label} ${op}`, mode: options?.strict ?? 'off', refuse: options?.refuse }) as T;
+    return checkPayload(dto, payload ?? {}, { endpoint: `${this.label} ${op}`, mode: options?.strict ?? 'error', refuse: options?.refuse }) as T;
   }
 
   /**
@@ -527,7 +527,7 @@ export abstract class CrudService<
   // ---- writes ---------------------------------------------------------------------------
 
   private writeChecks(op: string, label: string): BuiltInChecks<M> {
-    return { label, limits: limitsFor(op, this.limits), guards: this.guards, refs: true, json: this.jsonColumns, jsonMerge: this.jsonMerge, jsonStrict: this.frameworkOptions?.payloads?.strict ?? 'off' };
+    return { label, limits: limitsFor(op, this.limits), guards: this.guards, refs: true, json: this.jsonColumns, jsonMerge: this.jsonMerge, jsonStrict: this.frameworkOptions?.payloads?.strict ?? 'error' };
   }
 
   async create(ctx: ReqCtx<U>, dto: TCreate, outer?: Transaction, confirmed = false): Promise<unknown> {
@@ -842,7 +842,7 @@ export abstract class CrudService<
     }
     let dto: unknown = input;
     const loaded = this.ops.dto(action.name)?.dto;
-    const strict = this.frameworkOptions?.payloads?.strict ?? 'off';
+    const strict = this.frameworkOptions?.payloads?.strict ?? 'error';
     if (loaded || (action.input && strict !== 'off')) {
       // The action's payload: `confirm` is the framework's own flag (warnings accepted), never a field of it.
       const { confirm: _confirm, ...payload } = input;

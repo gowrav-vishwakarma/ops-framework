@@ -4,7 +4,7 @@ import { validateSync } from 'class-validator';
 import { fieldErrors, flattenValidationErrors, type FieldErrors } from '../errors.js';
 
 /**
- * How strictly request payloads are held to their DTO (`payloads.strict` in the framework options):
+ * How strictly request payloads are held to their DTO (`payloads.strict` in the framework options; default `error`):
  * - `off`: unknown fields are dropped silently (the old whitelist behaviour);
  * - `warn`: unknown fields are dropped and reported (logged once per endpoint and field, counted in `payloadWarnings()`),
  *   so a deployment shows which client sends what before the switch;

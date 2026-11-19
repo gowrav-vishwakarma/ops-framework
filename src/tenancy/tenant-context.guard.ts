@@ -62,10 +62,12 @@ export class TenantContextGuard implements CanActivate {
     const sequelize = await this.registry.get(placement.dbKey);
     await this.schemas.checkParity(sequelize, placement.dbKey, placement.schema);
     setTenant({ ref, placement, sequelize });
-    // The company is the token's: a body, query or route parameter naming another is refused (see company-input.ts).
-    checkCompanyInput(request.params, ref.companyId, 'param');
-    checkCompanyInput(request.query, ref.companyId, 'query', false);
-    checkCompanyInput(request.body, ref.companyId, 'body');
+    // The company is the token's: a body, query or route parameter naming another is refused, and with strict payloads
+    // (the default) one naming the signed-in company too (see company-input.ts).
+    const strict = (this.options.payloads?.strict ?? 'error') === 'error';
+    checkCompanyInput(request.params, ref.companyId, 'param', true, 0, strict);
+    checkCompanyInput(request.query, ref.companyId, 'query', false, 0, strict);
+    checkCompanyInput(request.body, ref.companyId, 'body', true, 0, strict);
     if (this.validator) {
       const extra = await this.validator.validate(request.claims ?? {}, request.user, request);
       if (extra) request.user = { ...request.user, ...extra };

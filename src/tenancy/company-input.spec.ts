@@ -12,6 +12,17 @@ describe('company input: the signed-in company only', () => {
     expect(body).toEqual({ name: 'x', lines: [{ qty: 1 }], where: {} });
   });
 
+  it('strict (payloads.strict error, the default): the signed-in company named anywhere is refused too; an empty one passes', async () => {
+    for (const body of [{ companyId: 7 }, { lines: [{ companyId: '7' }] }, { where: { '$account.companyId$': { $in: [7] } } }]) {
+      expect(() => checkCompanyInput(body, 7, 'body', true, 0, true)).toThrow(CompanyInputRefused);
+    }
+    const empty = { companyId: null, name: 'x' };
+    checkCompanyInput(empty, 7, 'body', true, 0, true);
+    expect(empty).toEqual({ name: 'x' });
+    const pipe = new CompanyInputPipe(true);
+    await expect(inTenant(() => pipe.transform({ companyId: 7 }, { type: 'body' }))).rejects.toThrow(CompanyInputRefused);
+  });
+
   it('refuses another company at any depth, in values, lists and operators', () => {
     for (const body of [{ companyId: 8 }, { lines: [{ companyId: 8 }] }, { where: { companyId: { $in: [7, 8] } } }, { include: [{ where: { 'account.companyId': 8 } }] }, { companyId: ' 9 ' }]) {
       expect(() => checkCompanyInput(body, 7, 'body')).toThrow(CompanyInputRefused);

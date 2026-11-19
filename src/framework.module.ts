@@ -256,7 +256,7 @@ export class FrameworkModule implements NestModule {
       // The company is the token's on every endpoint: the check on handler arguments runs as the first
       // global pipe. Added while the app is created, so it comes before the app's own useGlobalPipes
       // (validation would otherwise drop a body's companyId before it is seen).
-      { provide: CompanyInputPipe, inject: [ApplicationConfig], useFactory: (config: ApplicationConfig) => { const pipe = new CompanyInputPipe(); config.addGlobalPipe(pipe); return pipe; } },
+      { provide: CompanyInputPipe, inject: [ApplicationConfig, FRAMEWORK_OPTIONS], useFactory: (config: ApplicationConfig, options: FrameworkOptions) => { const pipe = new CompanyInputPipe((options.payloads?.strict ?? 'error') === 'error'); config.addGlobalPipe(pipe); return pipe; } },
       { provide: APP_GUARD, useExisting: JwtAuthGuard },
       { provide: APP_GUARD, useExisting: TenantContextGuard },
       { provide: APP_GUARD, useExisting: PermissionGuard },

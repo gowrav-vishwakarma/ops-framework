@@ -21,7 +21,7 @@ import type { LimitDef } from '../acl/limits.js';
 import { PermissionMeta } from '../acl/limits.js';
 import { allScope, resolveScopes, type ScopeDef, type ScopeRef } from '../acl/scopes.js';
 import type { Actor, ReqCtx } from '../auth/auth-user.js';
-import { flattenValidationErrors } from '../errors.js';
+import { flattenValidationErrors, payloadErrors } from '../errors.js';
 import { checkPayload, payloadProblems } from '../payload/check-payload.js';
 import { FRAMEWORK_OPTIONS, type FrameworkOptions } from '../options.js';
 import { permissionDenied, permissionLabel } from '../acl/permission-denied.js';
@@ -833,12 +833,14 @@ export abstract class CrudService<
    * input that fails is refused here, before the check steps: like a create's DTO (validated before any step), the
    * steps may rely on `c.dto` having its fields and types.
    */
-  private async actionInput(action: EntityAction<M, U>, input: Record<string, unknown>, issues: Issues): Promise<unknown> {
+  private async actionInput(action: EntityAction<M, U>, input: Record<string, unknown>, _issues: Issues): Promise<unknown> {
+    // Contract problems (a required input left empty, a field the payload does not take, a wrong type): the request is
+    // malformed, refused with 400 before any step (business refusals come from the check steps, 422).
+    const errors: Record<string, string[]> = {};
+    const add = (field: string, message: string) => (errors[field] ??= []).push(message);
     for (const field of action.inputs ?? []) {
       const given = input[field.id];
-      if (field.required && (given === undefined || given === null || String(given).trim() === '')) {
-        issues.field(field.id, `${field.label} is required`);
-      }
+      if (field.required && (given === undefined || given === null || String(given).trim() === '')) add(field.id, `${field.label} is required`);
     }
     let dto: unknown = input;
     const loaded = this.ops.dto(action.name)?.dto;
@@ -847,16 +849,16 @@ export abstract class CrudService<
       // The action's payload: `confirm` is the framework's own flag (warnings accepted), never a field of it.
       const { confirm: _confirm, ...payload } = input;
       const checked = payloadProblems(loaded ?? action.input!, payload, { endpoint: `${this.label} ${action.name}`, mode: strict });
-      for (const [field, messages] of Object.entries(checked.errors)) for (const message of messages) issues.field(field, message);
+      for (const [field, messages] of Object.entries(checked.errors)) for (const message of messages) add(field, message);
       dto = checked.instance;
     } else if (action.input) {
       // Strictness off and no dto.ts: the declared input class, unknown fields kept (as before payloads were held).
       dto = plainToInstance(action.input, input, { enableImplicitConversion: true });
       for (const [field, messages] of Object.entries(flattenValidationErrors(await validate(dto as object, { forbidUnknownValues: false })))) {
-        for (const message of messages) issues.field(field, message);
+        for (const message of messages) add(field, message);
       }
     }
-    issues.throwIfFailed();
+    if (Object.keys(errors).length) throw (this.frameworkOptions?.payloads?.refuse ?? payloadErrors)(errors);
     return dto;
   }
 

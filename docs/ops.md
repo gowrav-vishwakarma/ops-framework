@@ -50,7 +50,7 @@ ops/list/dto.ts        GET / query (a list-<view> falls back to it)
 - `export default` the payload class, written with class-validator (nested lines with `@ValidateNested` + `@Type`). Shapes shared by several operations go to `ops/_shared/`.
 - `create` and `update` fall back to `save/dto.ts`. Views, lookups and `delete` take no payload: a `dto.ts` there fails boot. An action with both `input:` (actions file) and `dto.ts` fails boot; keep the `dto.ts`.
 - The payload is checked before any step, on every call of the service's `create`, `update`, `perform` and `performAction` (internal callers too). Steps get the class instance as `c.dto`. `confirm` (accept warnings) is the framework's own flag, never a payload field.
-- How strictly: `payloads.strict` in the framework options, strict first: `error` (default) refuses an unknown field like any wrong field; `off` drops unknown fields silently; `warn` drops and reports them (logged once per endpoint and field, listed by `payloadWarnings()`). A field a client may leave out is declared optional; loosening is a deliberate setting. Missing, mistyped and out-of-list fields are refused in every mode, all together (422 field errors, or `payloads.refuse`).
+- How strictly: `payloads.strict` in the framework options, strict first: `error` (default) refuses an unknown field like any wrong field; `off` drops unknown fields silently; `warn` drops and reports them (logged once per endpoint and field, listed by `payloadWarnings()`). A field a client may leave out is declared optional; loosening is a deliberate setting. Missing, mistyped and out-of-list fields are refused in every mode, all together: 400 (`payloadErrors`, the request is malformed against its contract; `payloads.refuse` overrides). Business refusals from check steps stay 422, confirmations 409.
 - An action that takes nothing declares `input: NoPayload` (the framework's `statusActions` do): anything sent is an unknown field, and the contract shows it without a body.
 - Without a `dto.ts`, a `crudController` create / update is held to the controller's `create` / `update` class the same way, and an action to its `input:` class (with `off`: unknown fields kept, as before payloads were held).
 - Hand-written controllers: use `PayloadPipe` as the app's global pipe (`new PayloadPipe(strict, refuse)`). It holds bodies and queries typed with a class to it; bodies typed `Object` (a `Record`, an interface) pass untouched, so give every body a class.
@@ -191,7 +191,7 @@ Declared in `<module>.actions.ts`. Each action is a permission: `branch.deactiva
 - **`bulk`** — `POST /actions/:name` with `{ ids }`. Every record is checked first and blockers come back per record. Then before, the main change, and after run per record, in one transaction.
 - **`collection`** — `POST /actions/:name`, no record. Use `collectionStep`, and `runCollection` or `collectionExecute`. Set `c.result` for the response.
 
-`ops/<name>/dto.ts` (see *The payload*), or `input: SomeDto` in the actions file, validates the body with class-validator before the steps. An input that fails (or a required `inputs` field left empty) is refused with 422 field errors before the check steps run, so steps may rely on `c.dto` having its fields and types (as a create's DTO, validated before any step). `inputs` is the separate list the UI uses to draw the dialog.
+`ops/<name>/dto.ts` (see *The payload*), or `input: SomeDto` in the actions file, validates the body with class-validator before the steps. An input that fails (or a required `inputs` field left empty) is refused with 400 field errors (malformed against the contract) before the check steps run, so steps may rely on `c.dto` having its fields and types (as a create's DTO, validated before any step). `inputs` is the separate list the UI uses to draw the dialog.
 
 The row menu shows `row` actions only.
 
@@ -230,8 +230,12 @@ every entity (Ankpal's master audit); a rule of one entity stays a step in `ops/
 
 ## Errors the client sees
 
+Statuses follow one standard: 400 a request malformed against its contract (the payload check: unknown field, wrong
+type, missing required, not in the allowed list, a company named); 422 a well-formed request a business rule refuses
+(check-step blocks); 409 a warning to confirm; 401 / 403 sign-in / permission.
+
 A global filter (`ErrorAnswerFilter`, `database-errors.ts`) answers every error:
-- an `HttpException` (issues 422/409, `NotFoundException`...) as thrown;
+- an `HttpException` (payload 400, issues 422/409, `NotFoundException`...) as thrown;
 - a database refusal as something the user can act on (`databaseErrorAnswer`): unique → 422
   `<field> already exists`; a link to a missing row → 422 on the field; a row still in use → 409
   `in_use`; required / too long / out of range / badly formed → 422 on the column; a statement
@@ -527,7 +531,7 @@ list `jsonListShape(() => Entry)`.
 A CRUD service declares `jsonColumns = { itemSettings: ItemSettings }`. A create or update that sends
 one of them checks it before guards, limits and check steps:
 
-- a wrong type is a 422 field error on its path (`itemSettings.qtyDecimal`), every problem at once;
+- a wrong type is a field error on its path (`itemSettings.qtyDecimal`), every problem at once (a check-step issue: 422);
 - a key the shape does not declare follows `payloads.strict`: with `off` / `warn` it is dropped and logged once
   (`JsonColumns` logger; `warn` also lists it in `payloadWarnings()` as `<Model> <column>`), unless the client sent
   it back unchanged from the stored value (forms load a column and post it whole): then it stays, so an incomplete

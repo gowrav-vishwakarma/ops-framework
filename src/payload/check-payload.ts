@@ -1,7 +1,7 @@
 import { Logger, type Type } from '@nestjs/common';
 import { plainToInstance } from 'class-transformer';
 import { validateSync } from 'class-validator';
-import { fieldErrors, flattenValidationErrors, type FieldErrors } from '../errors.js';
+import { flattenValidationErrors, payloadErrors, type FieldErrors } from '../errors.js';
 
 /**
  * How strictly request payloads are held to their DTO (`payloads.strict` in the framework options; default `error`):
@@ -17,7 +17,7 @@ export interface PayloadCheck {
   /** `POST /sales-invoices`: names the endpoint in warnings. */
   endpoint: string;
   mode: PayloadStrictness;
-  /** Turns field errors into the app's refusal (default: the framework's `fieldErrors`). */
+  /** Turns field errors into the app's refusal (default: `payloadErrors`, 400: the request is malformed against its contract). */
   refuse?: (errors: FieldErrors) => Error;
 }
 
@@ -76,10 +76,10 @@ export function payloadProblems<T extends object>(dto: Type<T>, payload: unknown
   return { instance, errors };
 }
 
-/** `payloadProblems`, refused (`check.refuse`, default the framework's field errors) when any field is wrong. */
+/** `payloadProblems`, refused (`check.refuse`, default 400 `payloadErrors`) when any field is wrong. */
 export function checkPayload<T extends object>(dto: Type<T>, payload: unknown, check: PayloadCheck): T {
   const { instance, errors } = payloadProblems(dto, payload, check);
-  if (Object.keys(errors).length) throw (check.refuse ?? ((e: FieldErrors) => fieldErrors(e)))(errors);
+  if (Object.keys(errors).length) throw (check.refuse ?? ((e: FieldErrors) => payloadErrors(e)))(errors);
   return instance;
 }
 

@@ -164,7 +164,7 @@ export interface FrameworkOptions {
    * Request payloads held to their DTO (an operation's `dto.ts`, a controller's class through `PayloadPipe`).
    * `strict` (default `error`, strict first: a field the DTO does not name is refused; `warn` drops and reports it,
    * `off` drops it — loosening is a deliberate setting; see `PayloadStrictness`).
-   * `refuse` turns field errors into the app's answer (default: `fieldErrors`).
+   * `refuse` turns field errors into the app's answer (default: `payloadErrors`, 400: malformed against the contract).
    */
   payloads?: { strict?: PayloadStrictness; refuse?: (errors: FieldErrors) => Error };
   /** Service contracts between deployments (see `services/`). */

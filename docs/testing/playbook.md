@@ -3,8 +3,8 @@
 This file tells a developer, and the AI coding agent they hand it to, how to build a complete automated test system for
 one product built on:
 
-- **Frontend:** Quasar (Vue 3, TypeScript), using the **desk framework**. It is copied into the project at
-  `src/desk/framework/`.
+- **Frontend:** Quasar (Vue 3, TypeScript), using the **desk framework** (`@desk/framework`, a package cloned
+  with git next to the project and installed as a `file:` dependency).
 - **Backend:** NestJS, using the **ops framework** (`@ops/framework`, cloned with git for now) with sequelize-typescript
   and Postgres. Redis is optional.
 
@@ -68,7 +68,7 @@ Build them in the order of section 10. Each step has its own acceptance check.
 9. **One spec at a time when it fails.** Fix it, rerun that spec, then the whole tier. Never stack runs on top of each
    other.
 10. **Generic helpers go into the frameworks.** Anything that is not product-specific goes into the desk testkit
-    (`src/desk/framework/testkit/`) or `@ops/framework/testing`, so the next product gets it for free.
+    (`@desk/framework/testkit`, in the desk-framework repo) or `@ops/framework/testing`, so the next product gets it for free.
 11. **Never commit generated output:** reports, dumps, `test-results/`, `playwright-report/`, `.cache/`,
     `.e2e-run/`. Add all of them to `.gitignore` first.
 12. **Each tier has a README** that says how to run it, how to run one test, and how to write a new one.
@@ -971,13 +971,13 @@ a committed baseline of known gaps. The baseline only shrinks.
 
 ### 8.1 How the UI is driven
 
-The desk framework has an **automation driver** (`src/desk/framework/automation/`). When automation is on, it installs
+The desk framework has an **automation driver** (`@desk/framework`, `src/automation/`). When automation is on, it installs
 `window.__desk`, which can:
 
 - describe the screen as a tree of nodes (forms, fields, grids, rows, actions, dialogs), with their state and issues;
 - act on it (`act`, `fill`, `answer`, `navigate`, `press`).
 
-The **testkit** (`src/desk/framework/testkit/`, Node side, no runtime imports from the app) wraps it for Playwright:
+The **testkit** (`@desk/framework/testkit`, `src/testkit/`, Node side, no runtime imports from the app) wraps it for Playwright:
 `createDeskClient(page)`, `createDeskUser(client)`, grid helpers (`deskFindRow`, `deskRunRowAction`, `deskEditCell`,
 `deskExpectNoRow`), settings helpers (`deskSettingsRows`, `deskFormDiff`), `deskFixtureDefs()` for `test.extend`,
 `runDeskConformance` and `deskMcpTools`. Read `testkit/README.md` in your copy of the desk framework.
@@ -1097,12 +1097,16 @@ drive the app through the same driver the tests use, to explore a bug or draft a
      single instances in `server/`.
    - Read `ops-framework/docs/ops.md` before writing steps or tests.
 2. **desk framework:**
-   - Copy `src/desk/framework/` from the reference project into `frontend/src/desk/framework/`, including
-     `automation/` and `testkit/`.
-   - Product screens go in `frontend/src/desk/<product>/`. Do not edit the framework copy for product needs. Improve
-     it generically and note the change, so it can go back upstream.
+   - Clone the `desk-framework` repo next to the product (for example `~/Development/desk-framework`) and add it to
+     `frontend/package.json` as `"@desk/framework": "file:../../desk-framework"` (the path from `frontend/`). It ships
+     TypeScript sources (`exports`: `.`, `./testkit`, `./*`); the app's Vite build compiles them.
+   - Add an `fw:update` script that pulls the framework repo (ff-only), reinstalls it and writes its commit to
+     `.desk-framework-ref`, so every checkout pins the framework version it was tested with:
+     `git -C ../../desk-framework pull --ff-only && rm -rf node_modules/@desk/framework && npm install && git -C ../../desk-framework rev-parse HEAD > .desk-framework-ref`.
+   - Product screens go in `frontend/src/desk/<product>/`. Never patch the framework for product needs: improve it
+     generically in the desk-framework repo (with its unit tests), push, then `npm run fw:update`.
    - The auto-tester imports the testkit through a path alias (`@desk/testkit` →
-     `../frontend/src/desk/framework/testkit`).
+     `../../desk-framework/src/testkit/index.ts`), or `@desk/framework/testkit` when it installs the package.
 3. **Automation switch:** the driver installs only when the app is built or served with the test flag (for example
    `E2E_API_URL` set). A production bundle leaves it out. Write a test that checks a production build has no
    `window.__desk`.
@@ -1133,7 +1137,7 @@ drive the app through the same driver the tests use, to explore a bug or draft a
 > You are adding the automated test system described in `TEST-SYSTEM-PLAYBOOK.md` to this product (Quasar + desk
 > framework frontend in `frontend/`, NestJS + `@ops/framework` backend in `server/`). Read the whole playbook, then
 > `server/node_modules/@ops/framework/docs/ops.md` (or the cloned `ops-framework/docs/ops.md`) and
-> `frontend/src/desk/framework/testkit/README.md`.
+> the desk-framework repo's `src/testkit/README.md`.
 >
 > The system is e2e only: unit tests, backend e2e with its report, and the UI auto-tester. Do not build a scenarios
 > ("stories") tier or any parity check, even where the reference repo still has one; copy only the report helpers

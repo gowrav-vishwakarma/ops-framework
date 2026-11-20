@@ -236,6 +236,22 @@ npm run lint
 
 GitHub runs `npm test` on every push and pull request. The badge above is that workflow.
 
+## Testing and reports in a product
+
+The framework's own tests need no database. A product built on it needs more: Docker
+Postgres with a template database, backend e2e tests that record every call and the
+rows it changed, and a UI auto-tester. [`docs/testing/playbook.md`](docs/testing/playbook.md)
+is the step-by-step guide to building that system, for a developer or the AI agent they
+hand it to.
+
+[`docs/testing/sample-report/`](docs/testing/sample-report/) holds one spec file's report
+from a real e2e run (post-dated cheques). It is a sample, not a full run.
+- **The `.html` page:** open it in a browser to see each test's calls, bodies, answers
+  and changed rows.
+- **The `.json` file:** the summary the dev pages read.
+
+Section 6.4 of the playbook explains how the report is built.
+
 When the framework changes, update [`docs/ops.md`](docs/ops.md) in the same change.
 That file is the reference for steps, actions, flows, tenancy, services, migrations,
 ACL, guards and the admin plane.

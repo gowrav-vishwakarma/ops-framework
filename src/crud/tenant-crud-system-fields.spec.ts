@@ -50,6 +50,16 @@ describe('crudController writes', () => {
     expect(methods(['delete'])).toEqual(['remove', 'act', 'actAll', 'list']);
     expect(methods([])).toEqual(['act', 'actAll', 'list']);
   });
+
+  it('offers every record read by default; a resource that only answers its actions offers none (no route)', () => {
+    const reads = (r?: ReadonlyArray<'list' | 'get' | 'history'>) => {
+      const proto = crudController({ resource: 'thing', service: Svc as never, create: Body, update: Body, writes: [], ...(r ? { reads: r } : {}) }).prototype as unknown as Record<string, unknown>;
+      return ['list', 'get', 'history', 'act', 'actAll', 'lookup', 'view', 'actions'].filter((m) => typeof proto[m] === 'function');
+    };
+    expect(reads()).toEqual(['list', 'get', 'history', 'act', 'actAll', 'lookup', 'view', 'actions']);
+    expect(reads(['list'])).toEqual(['list', 'act', 'actAll', 'lookup', 'view', 'actions']);
+    expect(reads([])).toEqual(['act', 'actAll', 'lookup', 'view', 'actions']);
+  });
 });
 
 describe('TenantCrudService company condition', () => {

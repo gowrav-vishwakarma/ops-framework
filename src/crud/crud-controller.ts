@@ -39,6 +39,12 @@ interface CrudOptions<S> {
    * service's `create` / `update` / `remove` stay for its actions and other modules.
    */
   writes?: ReadonlyArray<'create' | 'update' | 'delete'>;
+  /**
+   * The plain record reads offered (default all): a resource that only answers its actions (a tool over the company's
+   * data, such as an audit) lists none, so the list, record and history routes are not routes at all. Lookups, views
+   * and actions stay.
+   */
+  reads?: ReadonlyArray<'list' | 'get' | 'history'>;
 }
 
 /** The caller's context with the scope, limits and scope data of another grant (an action's). */
@@ -185,6 +191,10 @@ export function crudController<S extends object>(
   const writes = new Set(options.writes ?? ['create', 'update', 'delete']);
   for (const [write, method] of [['create', 'create'], ['update', 'update'], ['delete', 'remove']] as const) {
     if (!writes.has(write)) delete (proto as unknown as Record<string, unknown>)[method];
+  }
+  const reads = new Set(options.reads ?? ['list', 'get', 'history']);
+  for (const read of ['list', 'get', 'history'] as const) {
+    if (!reads.has(read)) delete (proto as unknown as Record<string, unknown>)[read];
   }
 
   if (options.plane === 'control') AdminRoutes()(CrudBase);

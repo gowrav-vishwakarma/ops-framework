@@ -163,6 +163,68 @@ and history, with admin tokens and admin roles.
 the framework's own suite with no database. End-to-end specs live in the projects,
 one app per file, because models bind once per process.
 
+## A request's life: abort, time slots, idempotent saves
+
+Every request carries its id, an `AbortSignal`, a time slot and whether it only reads.
+The full reference is *A request's life* in [`docs/ops.md`](docs/ops.md).
+
+**A read nobody waits for stops.** When the client goes away (page left, reload,
+tab closed), a read request's signal fires:
+- the step runner stops before the next step;
+- the request's running SQL is cancelled;
+- the transaction rolls back.
+
+A long loop in an engine or a report checks `c.signal.throwIfAborted()` between chunks.
+
+**A write never stops because its client left.** A write is short and atomic. If its
+answer is lost, the idempotency key replays it.
+
+**Every request has a time slot.**
+
+| Slot | Time | Used for |
+| --- | --- | --- |
+| `fast` | 30 s | default: CRUD, lookups, saves |
+| `medium` | 120 s | reports |
+| `slow` | 10 min | exports, year-end close, recalculations, imports |
+
+- A request past its slot, read or write, answers 503 `{ code: 'timeout' }`, and a write is rolled back.
+- Inside a transaction, the database enforces the same limit with `SET LOCAL statement_timeout`.
+
+**Cancelling queries behind a pooler (AWS RDS Proxy, PgBouncer).** Behind a pooler the
+app never sees which database process runs its query. So every statement starts with a tag:
+`/* r:<request> c:<company> op:<Model.op> step:<file> */`.
+- **Cancel:** an abort cancels the rows of `pg_stat_activity` that carry the tag, from another connection.
+- **Where the tag comes from:** one patch of Sequelize's `Query.prototype.run`. The same tag tells a DBA which step sent a slow query.
+
+**Saves are idempotent.** A client sends `Idempotency-Key: <uuid>` on every write: a new
+UUID per submitted save, the same one on its retries. Ops keeps the key in Redis, scoped
+to company, user, route and key.
+
+| The same key again | Answer |
+| --- | --- |
+| same body, first save done | the first answer replayed |
+| same body, first save still running | 409 |
+| another body | 422 |
+
+A double click, a retry after a timeout, or a reload followed by Save again creates one record, not two.
+
+**Good practice for a project:**
+- Declare every route that is not fast:
+  ```ts
+  @Post('ledger-report') @Slot('medium', { readOnly: true })   // a hand-written route
+  { name: 'trialBalance', kind: 'collection', readOnly: true, slot: 'medium' }   // an action
+  ```
+- Mark a POST that only reads as read only, so it stops when its client leaves.
+- Never run a session-level `SET`. It pins RDS Proxy connections and leaks into the next request. Use `SET LOCAL` inside the transaction.
+- Pass `{ transaction: c.t }` to every query, so the tag, the slot and the rollback reach it.
+- On the client, keep these rules in the one HTTP client, never in page code:
+  - abort a page's pending reads when the page is left;
+  - send an `Idempotency-Key` on every write;
+  - never abort a write.
+  
+  The desk does this in `opsHttp`, and adds refresh-friendly drafts (`?draft=<key>`, kept in IndexedDB) that restore a form, and its save key, after a reload.
+- Test it with a real slow query: client gone, slot over, a replayed key, a reused key. Ankpal's `test/system/requests.e2e-spec.ts` is the example.
+
 ## What a module looks like
 
 ```

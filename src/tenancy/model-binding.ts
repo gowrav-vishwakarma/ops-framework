@@ -34,6 +34,15 @@ function refuse(name: string, property: string) {
   };
 }
 
+/** `_schema` set to the request's own schema is a no-op (the getter already answers it); anything else is refused. */
+function sameSchemaOr(name: string) {
+  const refused = refuse(name, '_schema');
+  return (value: unknown) => {
+    if (value === currentTenant()?.placement.schema) return;
+    refused();
+  };
+}
+
 const BOUND = new WeakSet<object>();
 
 /**
@@ -67,7 +76,9 @@ export function bindTenantModels(primary: Sequelize, control: () => Sequelize): 
     Object.defineProperty(model, '_schema', {
       configurable: true,
       get: () => requireTenant(model.name).placement.schema,
-      set: refuse(model.name, '_schema'),
+      // Copied code that calls `.schema(<the request's schema>)` (Sequelize clones the model and sets this) changes
+      // nothing and is let through; any other schema is refused.
+      set: sameSchemaOr(model.name),
     });
     if (PARTITION.field in model.getAttributes() && !PARTITION.exempt.includes(model.name)) installPartitionHooks(model);
     else if (isMirror(model)) installMirrorHooks(model);

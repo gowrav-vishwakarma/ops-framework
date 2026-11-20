@@ -129,7 +129,7 @@ export function crudController<S extends object>(
     @Post()
     @RequirePermission(resource, 'create')
     create(@Ctx() ctx: ReqCtx, @Body() dto: object, @Query('confirm') confirm?: string) {
-      return (this.service as AnyService).create(ctx, this.body('create', dto, options.create), undefined, confirm === 'true');
+      return (this.service as AnyService).create(ctx, this.body('create', routeId(dto, null), options.create), undefined, confirm === 'true');
     }
 
     /**
@@ -144,7 +144,7 @@ export function crudController<S extends object>(
     @Patch(':id')
     @RequirePermission(resource, 'update')
     update(@Ctx() ctx: ReqCtx, @Param('id', ParseIntPipe) id: number, @Body() dto: object, @Query('confirm') confirm?: string) {
-      return (this.service as AnyService).update(ctx, id, this.body('update', dto, options.update), undefined, confirm === 'true');
+      return (this.service as AnyService).update(ctx, id, this.body('update', routeId(dto, id), options.update), undefined, confirm === 'true');
     }
 
     @Delete(':id')
@@ -178,6 +178,17 @@ export function crudController<S extends object>(
 
   if (options.plane === 'control') AdminRoutes()(CrudBase);
   return CrudBase as unknown as Type<CrudRoutes<S>>;
+}
+
+/**
+ * The route names the record, never the body: a create's body `id` is dropped (a form sends `id: null`, or a copied
+ * record's id), an update's body `id` becomes the route's (steps that read `c.dto.id` see the record being changed).
+ * A body without `id` is left as it is, so a payload class without the field still checks it strictly.
+ */
+export function routeId(dto: object, id: number | null): object {
+  if (!dto || typeof dto !== 'object' || Array.isArray(dto) || !('id' in dto)) return dto;
+  const { id: _sent, ...rest } = dto as Record<string, unknown>;
+  return id === null ? rest : { ...rest, id };
 }
 
 const READS: WorkDeclaration = { readOnly: true };

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { routeId } from './crud-controller.js';
 import { TenantCrudService } from './tenant-crud.service.js';
 
 /** Exposes the protected mapping the create and update paths use. */
@@ -23,6 +24,16 @@ describe('TenantCrudService system fields', () => {
     const dto = { name: 'A', amount: 10, id: 3 };
     expect(Probe.strip(dto)).toEqual({ name: 'A', amount: 10 });
     expect(dto.id).toBe(3);
+  });
+});
+
+describe('the route names the record (crudController create / update)', () => {
+  it("a create's body id is dropped, an update's becomes the route's; a body without id is left as it is", () => {
+    expect(routeId({ id: null, name: 'A' }, null)).toEqual({ name: 'A' });
+    expect(routeId({ id: 99, name: 'A' }, 7)).toEqual({ id: 7, name: 'A' });
+    const plain = { name: 'A' };
+    expect(routeId(plain, 7)).toBe(plain);
+    expect(routeId(plain, null)).toBe(plain);
   });
 });
 

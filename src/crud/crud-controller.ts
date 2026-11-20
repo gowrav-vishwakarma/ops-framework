@@ -33,6 +33,12 @@ interface CrudOptions<S> {
   query?: Type<ListQueryDto>;
   /** `control`: an admin-panel collection (`ControlCrudService`), reachable with admin tokens only. */
   plane?: 'tenant' | 'control';
+  /**
+   * The plain writes offered (default all): a collection written only through its own actions (a picklist's `create`
+   * action, imported statements) lists fewer, and the others are not routes at all (not in the contract either). The
+   * service's `create` / `update` / `remove` stay for its actions and other modules.
+   */
+  writes?: ReadonlyArray<'create' | 'update' | 'delete'>;
 }
 
 /** The caller's context with the scope, limits and scope data of another grant (an action's). */
@@ -175,6 +181,11 @@ export function crudController<S extends object>(
   for (const write of ['create', 'update', 'remove'] as const) Reflect.defineMetadata(ROUTE_WORK, WRITES, proto[write]);
   const actionWork: WorkResolver = (req, get) => actionDeclaration((get(options.service) as unknown as AnyService).actionDef(req.params?.name ?? '') as EntityActionLike);
   for (const act of ['act', 'actAll'] as const) Reflect.defineMetadata(ROUTE_WORK, actionWork, proto[act]);
+
+  const writes = new Set(options.writes ?? ['create', 'update', 'delete']);
+  for (const [write, method] of [['create', 'create'], ['update', 'update'], ['delete', 'remove']] as const) {
+    if (!writes.has(write)) delete (proto as unknown as Record<string, unknown>)[method];
+  }
 
   if (options.plane === 'control') AdminRoutes()(CrudBase);
   return CrudBase as unknown as Type<CrudRoutes<S>>;

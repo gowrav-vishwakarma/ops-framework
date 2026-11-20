@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { routeId } from './crud-controller.js';
+import { crudController, routeId } from './crud-controller.js';
 import { TenantCrudService } from './tenant-crud.service.js';
 
 /** Exposes the protected mapping the create and update paths use. */
@@ -34,6 +34,21 @@ describe('the route names the record (crudController create / update)', () => {
     const plain = { name: 'A' };
     expect(routeId(plain, 7)).toBe(plain);
     expect(routeId(plain, null)).toBe(plain);
+  });
+});
+
+describe('crudController writes', () => {
+  class Svc {}
+  class Body {}
+  const methods = (writes?: ReadonlyArray<'create' | 'update' | 'delete'>) => {
+    const proto = crudController({ resource: 'thing', service: Svc as never, create: Body, update: Body, ...(writes ? { writes } : {}) }).prototype as unknown as Record<string, unknown>;
+    return ['create', 'update', 'remove', 'act', 'actAll', 'list'].filter((m) => typeof proto[m] === 'function');
+  };
+
+  it('offers every plain write by default; a collection written through its actions leaves the others out (no route)', () => {
+    expect(methods()).toEqual(['create', 'update', 'remove', 'act', 'actAll', 'list']);
+    expect(methods(['delete'])).toEqual(['remove', 'act', 'actAll', 'list']);
+    expect(methods([])).toEqual(['act', 'actAll', 'list']);
   });
 });
 

@@ -65,6 +65,12 @@ export class RequestWork {
   inFlight = 0;
   /** The operation (`<Model>.<op>`) and step file running now, named in the request's query tags; none outside a step. */
   at: { op?: string; step?: string } = {};
+  /**
+   * What the request did, for traces and test coverage: every operation it ran (`<Model>.<op>`) and every step file, in
+   * order, with the conditional ones its `when` skipped (`ran: false`).
+   */
+  readonly operations = new Set<string>();
+  readonly steps: Array<{ op: string; step: string; ran: boolean }> = [];
   private readonly controller = new AbortController();
   private readonly databases = new Map<string, Sequelize>();
   private timer: NodeJS.Timeout | null = null;
@@ -108,11 +114,22 @@ export class RequestWork {
   async within<T>(op: string, step: string, work: () => Promise<T>): Promise<T> {
     const outer = this.at;
     this.at = { op, step };
+    this.steps.push({ op, step, ran: true });
     try {
       return await work();
     } finally {
       this.at = outer;
     }
+  }
+
+  /** An operation the request runs (`<Model>.<op>`), whether or not it has step files. */
+  enter(op: string): void {
+    this.operations.add(op);
+  }
+
+  /** A conditional step its `when` left out. */
+  skip(op: string, step: string): void {
+    this.steps.push({ op, step, ran: false });
   }
 
   /** A database the request sent a query to (cancelled there on abort). */
@@ -187,10 +204,18 @@ export function runOutsideRequest<T>(work: () => Promise<T>): Promise<T> {
 export function startRequestWork(cls: Pick<ClsService, 'set' | 'getId'>, req: { method: string }, res: { writableFinished: boolean; once(event: 'close' | 'finish', listener: () => void): unknown }): void {
   const work = new RequestWork(req.method, cls.getId());
   cls.set(KEY, work);
+  byRequest.set(req, work);
   res.once('finish', () => work.end());
   res.once('close', () => {
     if (!res.writableFinished) work.clientGone();
   });
+}
+
+const byRequest = new WeakMap<object, RequestWork>();
+
+/** A request's work by its request object, also after the response (what it ran: traces, test coverage). */
+export function workOfRequest(req: object): RequestWork | undefined {
+  return byRequest.get(req);
 }
 
 /** Request ids: hex, safe inside a SQL comment. */

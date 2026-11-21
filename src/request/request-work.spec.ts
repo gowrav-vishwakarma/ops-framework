@@ -10,7 +10,7 @@ import { CANCEL_TAGGED_SQL, cancelPattern, cancelTagged, queryTag } from './canc
 import { IdempotencyStore, type IdempotencyRedis } from './idempotency-store.js';
 import { canonicalJson, idempotencyScope, requestHash } from './idempotency.interceptor.js';
 import { installQueryTag, RequestAbortedError } from './query-tag.js';
-import { ClientGone, currentWork, RequestTimedOut, RequestWork, requestSignal, slotMs, startRequestWork } from './request-work.js';
+import { ClientGone, currentWork, RequestTimedOut, RequestWork, requestSignal, slotMs, startRequestWork, workOfRequest } from './request-work.js';
 import { routeWork, Slot } from './slot.js';
 
 /**
@@ -170,6 +170,26 @@ describe('the step runner stops on abort', () => {
     const c = { op: 'report', signal: controller.signal };
     await expect(runner(steps).runPhase(c, 'check')).rejects.toBeInstanceOf(RequestTimedOut);
     expect(ran).toEqual(['read', 'slow']);
+  });
+
+  it('a request records what it ran: the operation, each step file in order, and the conditional steps its when left out; reachable by its request after the response', async () => {
+    const step = (file: string, when?: boolean): LoadedStep => ({ file, number: Number(file.slice(0, 3)), phase: 'check', impl: { check: async () => undefined, ...(when === undefined ? {} : { when: () => when }) } });
+    const svc = Object.assign(runner([step('010-check-a'), step('020-check-off', false), step('030-check-on', true)]), { model: { name: 'Payment' } });
+    const recorded = await inRequest('POST', async ({ work }) => {
+      await svc.runPhase({ op: 'report', signal: new AbortController().signal }, 'check');
+      return work;
+    });
+    expect([...recorded.operations]).toEqual(['Payment.report']);
+    expect(recorded.steps).toEqual([
+      { op: 'Payment.report', step: '010-check-a', ran: true },
+      { op: 'Payment.report', step: '020-check-off', ran: false },
+      { op: 'Payment.report', step: '030-check-on', ran: true },
+    ]);
+    const req = { method: 'GET' };
+    const cls = ClsServiceManager.getClsService();
+    await cls.run(async () => startRequestWork(cls, req, new FakeResponse()));
+    expect(workOfRequest(req)).toBeInstanceOf(RequestWork);
+    expect(workOfRequest({})).toBeUndefined();
   });
 
   it('without an abort every step runs', async () => {

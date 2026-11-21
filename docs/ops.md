@@ -284,6 +284,11 @@ refused (a `ROLLBACK` still goes); the request's running statements are cancelle
 connection goes back to the pool clean. The answer is 503 `{ code: 'timeout', message }` (client gone: none). A
 request that finished its work answers what it did, even if its slot ran out during the last statement.
 
+**What a request ran.** `RequestWork` keeps every operation it ran (`operations`: `<Model>.<op>`) and every step file in
+order (`steps`: `{ op, step, ran }`, `ran: false` for a conditional step its `when` left out); `workOfRequest(req)`
+reaches it by the request object, also after the response. For traces and test coverage (which model, action and
+setting branch a test went through); nothing in a request depends on it.
+
 **Cancel by tag.** Every statement a request sends starts with a comment that says who sent it:
 `/* r:<request id> c:<company> op:<Model.op> step:<step file> */` (op and step only while a step runs: the runner names
 them, no stack walk; `*/` in a value is broken up). It is added by one patch of Sequelize's Postgres

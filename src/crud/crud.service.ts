@@ -917,8 +917,16 @@ export abstract class CrudService<
 
   /** The phase's steps in file order; an aborted request (client gone on a read, slot over) stops before the next one. */
   private async runPhase(c: OpBase<Attrs, U>, phase: Phase): Promise<void> {
+    // Recorded only inside a request (traces, test coverage); outside one there is nothing to record into.
+    const work = currentWork();
+    const op = work ? `${this.model.name}.${c.op}` : '';
+    work?.enter(op);
     for (const loaded of this.ops.steps(c.op)) {
-      if (loaded.phase !== phase || (loaded.impl.when && !loaded.impl.when(c as never))) continue;
+      if (loaded.phase !== phase) continue;
+      if (loaded.impl.when && !loaded.impl.when(c as never)) {
+        work?.skip(op, loaded.file);
+        continue;
+      }
       c.signal.throwIfAborted();
       await this.runStep(loaded, c);
     }

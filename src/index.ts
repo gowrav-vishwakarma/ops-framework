@@ -110,7 +110,7 @@ export { CompanyInputPipe, CompanyInputRefused, checkCompanyInput } from './tena
 export { installCompanySqlCheck, missingCompany, CompanySqlRefused, type CompanySqlCheck } from './tenancy/company-sql.js';
 export * from './tenancy/control/tenant-routing.model.js';
 export * from './tenancy/control/tenant-shard.model.js';
-export { encryptSecret } from './tenancy/control/shard-crypto.js';
+export { decryptSecret, encryptSecret } from './tenancy/control/shard-crypto.js';
 export * from './tenancy/lifecycle.js';
 export * from './tenancy/move/move-company.js';
 export { PARTITION, partitionValue, type PartitionConfig } from './tenancy/partition.js';

@@ -422,7 +422,7 @@ The options (`FrameworkOptions`) carry the rest:
 | `tenancy.partition`, `resolve`, `placement`, `sharedSchema` | partition, user to tenant (default `{ companyId, tenantKey }`), `single` / `schemaPerTenant` / `routed` |
 | `tenancy.headers` | headers checked against the token (default `x-company-id` -> companyId, `x-tenant-id` -> tenantKey or companyId); a mismatch is 403 |
 | `auth.userClaims`, `jwtSecret`, `issuer`, `audience`, `tokenKind`, `epoch`, TTLs | claims to `AuthUser`, verification, token kind (default: `typ`, else a company token when it carries the partition field), `epoch: 'required'` to refuse tokens of a moved company (TMS) |
-| `secretKey`, `dbSync`, `controlDbUri`, `migrations`, `shardPool`, `shardIdleMs` | owned-schema and pool settings |
+| `secretKey`, `dbSync`, `controlDbUri`, `migrations`, `shardPool`, `shardIdleMs` | owned-schema and pool settings; `encryptSecret(plain, key)` / `decryptSecret(stored, key)` (AES-256-GCM, what shard connection strings use) are exported for a project's own secrets at rest |
 | `schemaParity` | `block` (503, default when owned), `warn` (logged once per schema, default when external), `off` |
 | `refs.undeclared` | undeclared id columns when building a schema: `error`, `warn` (default), `off` |
 | `redis`, `services`, `admin` | as before |

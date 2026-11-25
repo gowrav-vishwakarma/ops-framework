@@ -2,7 +2,7 @@ import { Inject, Injectable, Optional, type OnModuleInit } from '@nestjs/common'
 import { PermissionMeta } from '../acl/limits.js';
 import type { EffectivePermissions } from '../acl/acl.service.js';
 import type { AdminUser } from '../auth/auth-user.js';
-import { ClusterBus } from '../cluster/cluster-bus.js';
+import { BUS_TOPICS, ClusterBus } from '../cluster/cluster-bus.js';
 import { ADMIN_ACL_SOURCE, type AdminAclSource } from '../features.js';
 
 /** The admin side's own limits and hidden permissions; codes may repeat tenant ones without clashing. */
@@ -10,7 +10,6 @@ import { ADMIN_ACL_SOURCE, type AdminAclSource } from '../features.js';
 export class AdminPermissionMeta extends PermissionMeta {}
 
 const TTL_MS = 60_000;
-const TOPIC = 'framework.admin-acl';
 
 /**
  * An admin's permissions, from the admin permission source (`features.admin`: the framework's tables or the
@@ -28,7 +27,7 @@ export class AdminAclService implements OnModuleInit {
   ) {}
 
   onModuleInit(): void {
-    this.bus?.subscribe(TOPIC, () => this.cache.clear());
+    this.bus?.subscribe(BUS_TOPICS.adminAcl, () => this.cache.clear());
   }
 
   async effective(admin: AdminUser): Promise<EffectivePermissions> {
@@ -44,7 +43,7 @@ export class AdminAclService implements OnModuleInit {
   /** After a role's grants change, in every process. */
   forget(): void {
     this.cache.clear();
-    void this.bus?.publish(TOPIC, {});
+    void this.bus?.publish(BUS_TOPICS.adminAcl, {});
   }
 }
 

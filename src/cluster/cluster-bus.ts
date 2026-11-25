@@ -57,4 +57,6 @@ export const BUS_TOPICS = {
   acl: 'framework.acl',
   /** `{ companyId }`: settings changed. */
   settings: 'framework.settings',
+  /** `{}`: an admin role's grants changed; drop cached admin permission sets. */
+  adminAcl: 'framework.admin-acl',
 } as const;

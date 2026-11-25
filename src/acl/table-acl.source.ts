@@ -47,7 +47,7 @@ export class TableAclSource implements AclSource {
     return out;
   }
 
-  /** `acl.userStatusColumn`: refuse a user whose row is not active. */
+  /** `acl.userStatusColumn`: refuse a user whose row is gone or not active. */
   private async requireActive({ companyId, id: userId }: AuthUser, t?: Transaction): Promise<void> {
     const column = this.options?.acl?.userStatusColumn;
     if (!column || !userId) return;
@@ -55,7 +55,8 @@ export class TableAclSource implements AclSource {
       `SELECT ${quoteIdent(column)} AS status FROM ${quoteIdent(NAMES.userTable)} WHERE id = :userId AND ${quoteIdent(PARTITION.column)} = :companyId`,
       { replacements: { userId, companyId }, transaction: t },
     );
-    const status = rows[0]?.status;
-    if (status !== undefined && status !== 'active') throw new ForbiddenException(`Your account in this company is ${status}`);
+    if (!rows.length) throw new ForbiddenException('Your account in this company no longer exists');
+    const status = rows[0].status;
+    if (status !== 'active') throw new ForbiddenException(`Your account in this company is ${status}`);
   }
 }

@@ -56,6 +56,12 @@ describe('ACL cache', () => {
     await expect(acl.effective(user(1, 5))).rejects.toThrow('Your account in this company is inactive');
   });
 
+  it('acl.userStatusColumn refuses a user whose row is gone', async () => {
+    const db = { query: async () => [] };
+    const acl = new AclService(new TableAclSource(db as never, { acl: { userStatusColumn: 'status' } }));
+    await expect(acl.effective(user(1, 5))).rejects.toThrow('Your account in this company no longer exists');
+  });
+
   it('without acl.userStatusColumn the user row is not read', async () => {
     const seen: string[] = [];
     const db = { query: async (sql: string) => (seen.push(sql), []) };

@@ -57,10 +57,14 @@ export interface AdminTokenValidator {
 }
 export const ADMIN_TOKEN_VALIDATOR = Symbol('ADMIN_TOKEN_VALIDATOR');
 
-/** The admin side on a project's own tables: its admins' permissions, its audit and its session checks. */
+/**
+ * The admin side's project parts: its admins' permissions, its audit and its session checks. `acl` and `audit` go
+ * together: both given, the project's own tables; both omitted, the framework's (as `admin: 'tables'`), with only
+ * the project's `tokenValidator` (an app keeping its admin accounts in its own table checks them there).
+ */
 export interface AdminImpl {
-  acl: Type<AdminAclSource>;
-  audit: Type<ControlAuditSink>;
+  acl?: Type<AdminAclSource>;
+  audit?: Type<ControlAuditSink>;
   tokenValidator?: Type<AdminTokenValidator>;
 }
 
@@ -133,8 +137,9 @@ export interface FrameworkFeatures {
   services?: boolean;
   /**
    * The admin side (control plane, `FrameworkOptions.admin`). `true` / `'tables'`: the framework's admin roles,
-   * permissions, catalog sync and audit tables (`AdminAclModule` serves the roles). An `AdminImpl`: the project's own
-   * permission source and audit (Ankpal: classic's admin roles), no framework admin table.
+   * permissions, catalog sync and audit tables (`AdminAclModule` serves the roles). An `AdminImpl` with `acl` and
+   * `audit`: the project's own permission source and audit (Ankpal: classic's admin roles), no framework admin table.
+   * An `AdminImpl` with only `tokenValidator`: the framework's tables plus the project's admin token check.
    */
   admin?: boolean | 'tables' | AdminImpl;
   /**

@@ -133,17 +133,27 @@ function feature<T>(token: symbol, impl: FeatureImpl<T> | undefined, table: Type
   return [useClass, { provide: token, useExisting: useClass }];
 }
 
-/** `features.admin` on the framework's own tables (`true` / `'tables'`), not the project's (`AdminImpl`). */
-const adminTables = (features: ResolvedFeatures) => features.admin === true || features.admin === 'tables';
+/**
+ * `features.admin` on the framework's own tables: `true` / `'tables'`, or an `AdminImpl` without `acl` and `audit`
+ * (only a `tokenValidator`). An `AdminImpl` with one of `acl` / `audit` but not the other is refused.
+ */
+const adminTables = (features: ResolvedFeatures): boolean => {
+  const admin = features.admin;
+  if (!admin) return false;
+  if (admin === true || admin === 'tables') return true;
+  if (!!admin.acl !== !!admin.audit) throw new Error('features.admin: give both acl and audit (project tables) or neither (framework tables)');
+  return !admin.acl;
+};
 
 /** The admin side: permissions, audit and, on the framework's tables, the catalog sync. */
 export function adminProviders(features: ResolvedFeatures): Provider[] {
   const admin = features.admin;
   if (!admin) return [];
   const own = adminTables(features);
-  const acl = own ? TableAdminAclSource : (admin as AdminImpl).acl;
-  const audit = own ? TableControlAuditSink : (admin as AdminImpl).audit;
-  const validator = own ? undefined : (admin as AdminImpl).tokenValidator;
+  const impl = typeof admin === 'object' ? admin : undefined;
+  const acl = own ? TableAdminAclSource : impl!.acl!;
+  const audit = own ? TableControlAuditSink : impl!.audit!;
+  const validator = impl?.tokenValidator;
   return [
     ...(validator ? [validator, { provide: ADMIN_TOKEN_VALIDATOR, useExisting: validator }] : []),
     acl,

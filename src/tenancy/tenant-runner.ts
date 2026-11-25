@@ -22,17 +22,28 @@ export class TenantRunner {
     return runWithTenant({ ref, placement, sequelize }, work);
   }
 
-  /** `forEachTenant`: every active tenant, one after the other. A failing tenant is reported, the rest still run. */
-  async forEach(work: (ref: TenantRef) => Promise<void>): Promise<Array<{ companyId: number; error: unknown }>> {
-    const failures: Array<{ companyId: number; error: unknown }> = [];
+  /**
+   * `forEachTenant`: every active tenant, one after the other. A failing tenant is reported, the rest still run.
+   * `label` names the job in each failure, so a caller collecting several jobs' failures can tell them apart.
+   */
+  async forEach(work: (ref: TenantRef) => Promise<void>, options: { label?: string } = {}): Promise<TenantFailure[]> {
+    const failures: TenantFailure[] = [];
     for (const route of await this.placements.activeRoutes()) {
       const ref = { companyId: route.companyId };
       try {
         await this.run(ref, () => work(ref), { placement: { dbKey: route.dbKey, schema: route.schema, epoch: route.epoch } });
       } catch (error) {
-        failures.push({ companyId: route.companyId, error });
+        failures.push({ companyId: route.companyId, error, ...(options.label ? { label: options.label } : {}) });
       }
     }
     return failures;
   }
+}
+
+/** A tenant `TenantRunner.forEach` could not run `work` for. */
+export interface TenantFailure {
+  companyId: number;
+  error: unknown;
+  /** The `label` given to `forEach`. */
+  label?: string;
 }

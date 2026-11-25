@@ -59,7 +59,7 @@ export interface FrameworkOptions {
     actionLabels?: Record<string, string>;
     /**
      * `features.acl: 'tables'`: a column of `NAMES.userTable` holding the user's status (`'status'`).
-     * When set, a user whose row there is not `'active'` is refused (403) when permissions load.
+     * When set, a user whose row there is gone or not `'active'` is refused (403) when permissions load.
      * Cached with the permissions: call `AclService.forgetUser` after changing it.
      */
     userStatusColumn?: string;
@@ -182,6 +182,11 @@ export interface FrameworkOptions {
     userClaims: (claims: Record<string, unknown>) => AdminUser;
     /** Admin token lifetime. Default `8h`. */
     tokenTtl?: string;
+    /**
+     * `features.admin: 'tables'`: an admin edits a role to grant only what they hold themselves (scope, limits);
+     * the rest is refused as a `permissions` field error. Default off.
+     */
+    grantWithinOwn?: boolean;
   };
   /**
    * Request payloads held to their DTO (an operation's `dto.ts`, a controller's class through `PayloadPipe`).

@@ -19,7 +19,8 @@ What a project gets from `ReportsModule.register(...)`:
 - the **studio routes**: catalog, list, run, lookup, save, delete;
 - **extension points**: the project's own stage kinds, named engines, native stages, catalog notes, row scope.
 
-The browser side (viewer, designer, pivot) is `@desk/framework/reports` (`desk-framework/docs/reports.md`).
+The browser side (list, viewer, pivot, designer, its own extension points) is `@desk/framework/reports`
+(`desk-framework/docs/reports.md`); a project's designer step for its own stage kind is `defineStudioStep` there.
 
 Read next: `src/reports/samples/reports.ts` (one sample per stage kind and output feature, on the sample models in
 `samples/models.ts`) and `src/reports/reports.spec.ts` (every sample compiled, and what each feature produces).
@@ -132,6 +133,52 @@ inputs are always bound, never written into the SQL.
 
 Input defaults may be date words: `today`, `fyStart`, `fyEnd`, `fyToDate`, `monthStart`. Financial years start on
 1 April (`fy`, `fyStart`, the `fy` date bucket); the user's `fiscalYearStart` moves `fyStart` / `fyEnd`.
+
+## Routes and payloads
+
+`POST /<routes.path>/<action>` with the body below (201). Names are the defaults; `routes.actions` renames them.
+
+| Action | Body | Answer |
+|---|---|---|
+| `catalog` | `{}` | `{ version, models: [{ name, label, fields: [{ name, label, type, column, values?, primaryKey? }], relations: [{ name, label, type: 'one' \| 'many', target, sourceKey, targetKey, where? }], scope: { company, row, rowPath?, softDelete } }], functions }` |
+| `list` | `{}` | `{ reports: [{ origin: 'system' \| 'saved', name, title, category, description, definition, id?, status? }], pivots: [{ id, name, title, category, description, definition }] }` |
+| `run` | `{ name \| id \| definition, params?, where?, sort?, limit?, offset?, previewStage?, columns?, bare?, summary? }` | `{ columns: [{ name, label, format? }], rows, count, groups?, totals, meta: { ms, report, stage?, truncated?, periods? } }` |
+| `lookup` | `{ model, label, value?, query?, limit? }` | `{ rows: [{ value, label }] }` |
+| `save` | `{ definition, id?, status? }` | `{ id, name }` |
+| `delete` | `{ id }` | `{ done: true }` |
+
+A run, field by field:
+
+- `params`: input values by id; missing ones take the default (date words resolved), a `required` one refuses.
+  Lookups take ids (or `{ id }` rows), multi lookups and selects a list.
+- `where`: the grid's filter row on output columns, `{ $and: [{ column: { $iLike | $eq | $gt | $gte | $lt | $lte |
+  $between | $in: value } }] }` (`column-filter.ts`); a column with `filterable: false` is ignored.
+- `sort`: `[{ column, dir }]` on output columns (else the output's sort); groups always sort first.
+- `limit` / `offset`: a page (default `output.pageSize`, 100; at most 5,000; `0` every row up to 50,000). With
+  `output.pageBy` they count whole groups and the answer has `groups`.
+- `previewStage`: stop after that stage and answer its rows (the designer's per-step preview).
+- `columns`: only these output columns are worked out (and what they need); `bare`: rows only, no totals or default
+  sort; `summary: { keys: [{ column, bucket? }], values }`: rows grouped on the server for a pivot (one row per key,
+  `__rows`, `<v>__n`, and for numbers `<v>`, `<v>__min`, `<v>__max`; dates bucket by `month`, `quarter`, `fy`, `year`).
+- `totals`: the summed columns, plus `__groups` (subtotals of the groups on this page, per group column) and
+  `__footers` (`__label` and figures per footer line).
+
+Refusals: a definition problem or a bad input is 400 with the stage named (`lines: has no column "qty"`); a report of
+another company is 404; an archived one 403; too many runs at once 503 ("try again in a moment"); a database error
+comes back in its own words (400), so the designer and an assistant can fix the step.
+
+## Writing a good report
+
+- Start from the sample nearest to what you need (`samples/reports.ts`) or a shipped report of the project.
+- One `source` per thing read; reach belongs-to fields by path (`invoice.party.name`); aggregate has-many data in its
+  own source and `join` or `exists` it back.
+- Filter early (in the source's `where`), so later steps read fewer rows; keep keys (ids) in the stages so `join`,
+  `top` and drill-downs have them.
+- Name stages and columns plainly (`lines`, `byParty`, `sales`); the designer shows them.
+- Give money columns `format: 'money'`, quantities `qty`; total what adds up and give rates a formula `total`.
+- `pageBy` a group when a group's rows belong together on screen (a party's bills); leave it off when one group can be
+  huge.
+- Ship a report in code (`shipped`) once it is reviewed: compile it in a unit spec against the project's catalog.
 
 ## Extending: a stage kind of your own
 

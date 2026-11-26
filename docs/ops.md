@@ -764,6 +764,14 @@ Two languages, kept apart:
 
 Test a flow without a database: `runFlow(file, 'check', fakeOpContext({ dto, row, services: [[FlowDb, fakeDb]] }))` .
 
+## Reports
+
+The report language (RDL2: parameters → stages → output, as JSON, no SQL), its compiler and runner, and the studio
+routes (catalog, list, run, lookup, save, delete): `ReportsModule.register({ store, user, … })` in the project's
+module. A project adds its own stage kinds (`defineReportStage`), engines (`defineReportEngine`) and native stages, and
+keeps saved reports in its own table (`ReportStore`). Guide, samples and extension points: `docs/reports.md`; the
+browser side is `@desk/framework/reports`.
+
 ## Seeing it
 
 `npm run flow` rewrites `docs/entity-flow.md` from the running modules: every operation, its route, its step files, and `=> effect` where the main change sits (or `=> <op>/500-execute.ts (replaces: ...)`). `OPS_TRACE=1` logs each step and its time. An unexpected error from a step is rethrown with the file name prefixed, `[ops] branches/ops/deactivate/020-check-enforce-rules.ts: ...`.

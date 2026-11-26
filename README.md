@@ -7,7 +7,7 @@ sequelize-typescript library: every create, update, delete, list and action of a
 entity runs as numbered step files, inside one transaction, with tenancy, permissions,
 row guards and audit already in place.
 
-The how-to is [`docs/ops.md`](docs/ops.md). This page is why the framework is shaped
+The how-to is [`docs/ops.md`](docs/ops.md); reports (the report language, its engine and the studio routes) are [`docs/reports.md`](docs/reports.md). This page is why the framework is shaped
 this way, and what a project gets from it.
 
 ## Why

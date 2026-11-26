@@ -135,3 +135,7 @@ export { installQueryCapture, queryShape } from './logging/query-capture.js';
 export { Slot } from './request/slot.js';
 export { ClientGone, DEFAULT_SLOTS, RequestTimedOut, requestSignal, slotMs, workOfRequest, type RequestOptions, type SlotName, type WorkDeclaration } from './request/request-work.js';
 export { IDEMPOTENCY_HEADER, IdempotencyInterceptor, REPLAYED_HEADER } from './request/idempotency.interceptor.js';
+
+// Reports: the report language (RDL2), its compiler and runner, and the studio routes (`docs/reports.md`)
+export * from './reports/index.js';
+export { buildColumnFilterClause, buildColumnFilterClauseBind, parseReportSort, reportSortDirection, rowMatchesColumnWhere, scopeColumnWhereToRowFields } from './reports/column-filter.js';

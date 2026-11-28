@@ -155,6 +155,7 @@ function underSql(ctx: ReportCompileContext, id: string): string | null {
   const right = model?.fields.find((field) => field.name === 'right');
   const key = model?.fields.find((field) => field.name === (param.lookup?.value ?? 'id'));
   if (!model || !left || !right || !key) throw new ExpressionError(`under(@${id}) needs a lookup on a tree, such as AccountGroup`);
+  if (!model.scope.company && !model.scope.companyShared) throw new ExpressionError(`${model.label} has no company column and is not shared by every company, so a report cannot read it`);
   const picked = paramValue(ctx, id);
   const ids = (Array.isArray(picked) ? picked : picked === null || picked === undefined ? [] : [picked]).filter((value) => value !== null && value !== '');
   if (!ids.length) return null;
@@ -225,6 +226,13 @@ function rowScope(ctx: ReportCompileContext, model: CatalogModel, alias: string)
   return out;
 }
 
+/** A model without the company column is read only when every company shares it; else no report reads it. */
+function companyGuard(model: CatalogModel, stage: string): void {
+  if (!model.scope.company && !model.scope.companyShared) {
+    throw new ReportCompileError(`${model.label} has no company column and is not shared by every company, so a report cannot read it`, stage);
+  }
+}
+
 function column(model: CatalogModel, field: string, stage: string): string {
   const found = model.fields.find((item) => item.name === field);
   if (!found) throw new ReportCompileError(`${model.label} has no field "${field}"`, stage);
@@ -235,6 +243,7 @@ function compileSource(stage: Rdl2SourceStage, ctx: ReportCompileContext, column
   const base = ctx.catalog.models[stage.model];
   if (!base) throw new ReportCompileError(`"${stage.model}" is not a model a report can read`, stage.id);
   if (!stage.fields.length) throw new ReportCompileError('picks no fields', stage.id);
+  companyGuard(base, stage.id);
   const joins = new Map<string, JoinPlan>();
   const root: JoinPlan = { alias: 't0', model: base, sql: '' };
 
@@ -259,6 +268,7 @@ function compileSource(stage: Rdl2SourceStage, ctx: ReportCompileContext, column
       }
       const target = ctx.catalog.models[relation.target];
       if (!target) throw new ReportCompileError(`"${relation.target}" is not readable`, stage.id);
+      companyGuard(target, stage.id);
       if (joins.size >= MAX_JOINS) throw new ReportCompileError(`reads more than ${MAX_JOINS} relations`, stage.id);
       const alias = `t${joins.size + 1}`;
       const on = [
@@ -304,7 +314,8 @@ function compileSource(stage: Rdl2SourceStage, ctx: ReportCompileContext, column
       const condition = within(header.alias, header.model);
       if (condition) where.push(condition);
     } else if (!base.scope.rowShared && ctx.catalog.unscoped === 'refuse') {
-      throw new ReportCompileError(`${base.label} is not limited to branches, so it cannot be read with a right limited to some branches`, stage.id);
+      const words = ctx.catalog.rowLabel ?? { one: 'scope', many: 'scopes' };
+      throw new ReportCompileError(`${base.label} is not limited by ${words.one}, so a right limited to some ${words.many} cannot read it`, stage.id);
     }
   }
 

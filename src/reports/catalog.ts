@@ -38,8 +38,11 @@ export interface CatalogRelation {
 
 /** How every read of a model is narrowed. Columns are database columns. */
 export interface CatalogScope {
-  /** The partition (company) column, or null for a model every company shares. */
+  /** The partition (company) column; null for a model without it. */
   company: string | null;
+  /** Shared by every company (the partition's `exempt` list): read with no company condition. Else a model without
+   * the column is refused, so a model a project forgot to partition never reads other companies' rows. */
+  companyShared?: boolean;
   /** Row scope (`reports.rowScope`): `own` has the scope field, `path` reaches it through `rowPath`, `none` is not scoped. */
   row: 'own' | 'path' | 'none';
   /** `own`: the scope field's column (the first of `rowColumns`). */
@@ -68,6 +71,8 @@ export interface ModelCatalog {
   models: Record<string, CatalogModel>;
   /** `rowScope.unscoped`: a scoped user's read of an unscoped model is refused (`refuse`) or reads it whole. */
   unscoped?: 'read' | 'refuse';
+  /** What the row scope is called in refusals (`rowScope.label`, or from its field). */
+  rowLabel?: { one: string; many: string };
 }
 
 /** The catalog as the browser gets it: no table or scope column names. */
@@ -192,6 +197,7 @@ export function buildReportCatalog(statics: Record<string, ModelStatic<Model>>, 
       relations: [],
       scope: {
         company: PARTITION.field in attributes && !PARTITION.exempt.includes(name) ? column(PARTITION.field) : null,
+        ...(PARTITION.exempt.includes(name) ? { companyShared: true } : {}),
         ...rowScopeOf(name),
         softDelete: flag ? { column: column(flag), kind: 'flag' } : paranoid ? { column: column(paranoid), kind: 'timestamp' } : null,
       },
@@ -255,5 +261,12 @@ export function buildReportCatalog(statics: Record<string, ModelStatic<Model>>, 
   }
 
   const version = createHash('sha1').update(JSON.stringify(models)).digest('hex').slice(0, 12);
-  return { version, models, ...(rows?.unscoped ? { unscoped: rows.unscoped } : {}) };
+  return { version, models, ...(rows?.unscoped ? { unscoped: rows.unscoped } : {}), ...(rows ? { rowLabel: rows.label ?? scopeLabel(rows.field) } : {}) };
+}
+
+/** Words for a scope from its field: `branchId` → branch / branches, `regionCode` → region code / region codes. */
+function scopeLabel(field: string): { one: string; many: string } {
+  const one = field.replace(/Id$/, '').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
+  const many = /(s|x|z|ch|sh)$/.test(one) ? `${one}es` : /[^aeiou]y$/.test(one) ? `${one.slice(0, -1)}ies` : `${one}s`;
+  return { one, many };
 }

@@ -74,6 +74,8 @@ export interface ReportRowScopeOptions {
    * `refuse` refuses the report, so a model left out of the mapping fails closed.
    */
   unscoped?: 'read' | 'refuse';
+  /** What the scope is called in refusals (`{ one: 'branch', many: 'branches' }`). Default: from `field` (`branchId` → branch). */
+  label?: { one: string; many: string };
 }
 
 /** The signed-in user as a report needs them. A project's `ReportUserSource` adds what its hooks read. */

@@ -79,6 +79,13 @@ export class MyReportsModule {}
   lines reach both through their header). A model with none of these (not free, no field, no path) is read whole by
   default; `unscoped: 'refuse'` refuses such a read under a scoped right instead, so a model left out of the mapping
   fails closed (a user who reads every branch is never refused). A stage marked `branchScope: 'none'` stays unscoped.
+  The scope's words in refusals are the project's: `label: { one: 'region', many: 'regions' }`, else from the field
+  (`branchId` → branch / branches); nothing names branches in the framework. Company only: no `rowScope`.
+- **Company** (the framework's partition) always applies and always fails closed: every model is read for the signed-in
+  company only; a model without the partition column is read only when every company shares it (the partition's
+  `exempt` list, such as states or currencies), and a report or lookup reading any other such model, as its source,
+  through a join or in `under(@param)`, is refused. A model a project forgot to partition never shows another company's
+  rows.
 - **Catalog notes**: `include`, `hiddenModels`, `hiddenFields` (beyond the framework's: password, secret, token, otp,
   apiKey, hash, salt, privateKey), `labels`, `acronyms`, `softDeleteFlags` (a flag field true on a deleted row, such
   as `isDelete`; paranoid models are found by themselves). Company scope is the framework's partition field.

@@ -114,9 +114,39 @@ describe('reports', () => {
     expect(run(multi, source('Memo', 'text'), [1])).toContain('"memos"');
     const strict = buildReportCatalog(sequelize.models as never, { softDeleteFlags: [] }, { ...rowScope, unscoped: 'refuse' as const });
     expect(() => run(strict, source('Memo', 'text'), [1])).toThrow(ReportCompileError);
-    expect(() => run(strict, source('Memo', 'text'), [1])).toThrow(/Memo.*not limited to branches|not limited/i);
+    expect(() => run(strict, source('Memo', 'text'), [1])).toThrow('Memo is not limited by branch, so a right limited to some branches cannot read it');
+    // The scope's words are the project's (`label`), never hardcoded.
+    const byRegion = buildReportCatalog(sequelize.models as never, { softDeleteFlags: [] }, { ...rowScope, unscoped: 'refuse' as const, label: { one: 'region', many: 'regions' } });
+    expect(() => run(byRegion, source('Memo', 'text'), [1])).toThrow('Memo is not limited by region, so a right limited to some regions cannot read it');
     expect(run(strict, source('Memo', 'text'), null)).toContain('"memos"');
     expect(run(strict, source('Party', 'name'), [1])).toContain('"parties"');
+  });
+
+  /*
+   * The company (the partition) always fails closed: a model without the partition column is read only when it is
+   * shared by every company (the partition's `exempt` list); otherwise a report reading it, directly or through a join,
+   * is refused, whatever the row scope.
+   */
+  it('refuses a model without the company column unless it is shared by every company', async () => {
+    const { PARTITION } = await import('../tenancy/partition.js');
+    const sequelize = new Sequelize({ dialect: 'postgres', logging: false, database: 'x', username: 'x', password: 'x' });
+    sequelize.addModels(SAMPLE_MODELS);
+    const source = (model: string, path: string): Report => ({ lang: 'rdl2', name: `t.${model}`, title: model, category: 'Test', params: [], stages: [{ kind: 'source', id: 'rows', model, fields: [{ as: 'x', path }] }] }) as never;
+    const saved = [...PARTITION.exempt];
+    try {
+      // Memo without its company column (as a model a project forgot to partition).
+      const withoutCompany = buildReportCatalog(sequelize.models as never, { softDeleteFlags: [] }, undefined);
+      withoutCompany.models.Memo!.scope.company = null;
+      const run = (catalog: typeof withoutCompany, report: Report) => compileStages(report, { catalog, scope: { ...scope, rowIds: null }, params: {}, binder: new SqlBinder() }).withSql;
+      expect(() => run(withoutCompany, source('Memo', 'text'))).toThrow('Memo has no company column and is not shared by every company, so a report cannot read it');
+      // Shared by every company: read, with no company condition.
+      PARTITION.exempt.push('Memo');
+      const shared = buildReportCatalog(sequelize.models as never, { softDeleteFlags: [] }, undefined);
+      expect(shared.models.Memo!.scope).toMatchObject({ company: null, companyShared: true });
+      expect(run(shared, source('Memo', 'text'))).not.toContain('company_id');
+    } finally {
+      PARTITION.exempt.splice(0, PARTITION.exempt.length, ...saved);
+    }
   });
 
   it('works a project stage kind out in code: empty until the runner has the figures, then joined back', () => {

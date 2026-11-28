@@ -289,11 +289,22 @@ function compileSource(stage: Rdl2SourceStage, ctx: ReportCompileContext, column
   if (stage.branchScope !== 'none' && ctx.scope.rowIds !== null) {
     // Nothing allowed reads nothing: an empty IN list is not valid SQL.
     const ids = ctx.binder.bind(ctx.scope.rowIds.length > 0 ? ctx.scope.rowIds : [null]);
-    if (base.scope.row === 'own' && base.scope.rowColumn) {
-      where.push(`t0.${quoteIdent(base.scope.rowColumn)} IN (${ids})`);
+    // Any of the model's scope columns is enough: `(a IN ids OR b IN ids)`.
+    const within = (alias: string, model: CatalogModel): string | null => {
+      const columns = model.scope.rowColumns ?? (model.scope.rowColumn ? [model.scope.rowColumn] : []);
+      if (!columns.length) return null;
+      const parts = columns.map((col) => `${alias}.${quoteIdent(col)} IN (${ids})`);
+      return parts.length === 1 ? parts[0]! : `(${parts.join(' OR ')})`;
+    };
+    if (base.scope.row === 'own') {
+      const condition = within('t0', base);
+      if (condition) where.push(condition);
     } else if (base.scope.row === 'path' && base.scope.rowPath) {
       const header = reach(base.scope.rowPath.split('.'));
-      if (header.model.scope.rowColumn) where.push(`${header.alias}.${quoteIdent(header.model.scope.rowColumn)} IN (${ids})`);
+      const condition = within(header.alias, header.model);
+      if (condition) where.push(condition);
+    } else if (!base.scope.rowShared && ctx.catalog.unscoped === 'refuse') {
+      throw new ReportCompileError(`${base.label} is not limited to branches, so it cannot be read with a right limited to some branches`, stage.id);
     }
   }
 

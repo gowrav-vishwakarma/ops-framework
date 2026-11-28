@@ -9,6 +9,7 @@ import { TenantModel, tenantTable } from '../../db/tenant.model.js';
  *   Branch ─< Invoice ─< InvoiceLine >─ Product >─ Category (a tree: `left` / `right`)
  *              │ └── Party >─ Branch (home branch)
  *   Branch ─< Payment >─ Party        Branch ─< StockMove >─ Product
+ *   Branch ─< Transfer (from and to branch) ─< TransferLine >─ Product     Memo (no branch: a gap in the scope mapping)
  */
 
 const naming = { underscored: true };
@@ -177,4 +178,47 @@ export class StockMove extends TenantModel {
   product?: Rel<Product>;
 }
 
-export const SAMPLE_MODELS = [Branch, Party, Category, Product, Invoice, InvoiceLine, Payment, StockMove];
+/** Stock sent from one branch to another: a user of either branch may read it (`rowScope.fields`). */
+@Table(tenantTable('transfers', [], naming))
+export class Transfer extends TenantModel {
+  @ForeignKey(() => Branch)
+  @Column({ type: DataType.INTEGER, allowNull: false })
+  fromBranchId: number;
+
+  @ForeignKey(() => Branch)
+  @Column({ type: DataType.INTEGER, allowNull: false })
+  toBranchId: number;
+
+  @Column({ type: DataType.DATEONLY, allowNull: false })
+  sentOn: string;
+
+  @HasMany(() => TransferLine)
+  lines?: Rel<TransferLine[]>;
+}
+
+/** Transfer lines: no branch of their own, they reach both through `transfer` (found by their name). */
+@Table(tenantTable('transfer_lines', [], naming))
+export class TransferLine extends TenantModel {
+  @ForeignKey(() => Transfer)
+  @Column({ type: DataType.INTEGER, allowNull: false })
+  transferId: number;
+
+  @ForeignKey(() => Product)
+  @Column({ type: DataType.INTEGER, allowNull: false })
+  productId: number;
+
+  @Column({ type: DataType.DECIMAL(14, 3), allowNull: false })
+  qty: string;
+
+  @BelongsTo(() => Transfer)
+  transfer?: Rel<Transfer>;
+}
+
+/** A note with no branch and not shared by every branch: unscoped, a gap `rowScope.unscoped: 'refuse'` closes. */
+@Table(tenantTable('memos', [], naming))
+export class Memo extends TenantModel {
+  @Column({ type: DataType.TEXT, allowNull: false })
+  text: string;
+}
+
+export const SAMPLE_MODELS = [Branch, Party, Category, Product, Invoice, InvoiceLine, Payment, StockMove, Transfer, TransferLine, Memo];

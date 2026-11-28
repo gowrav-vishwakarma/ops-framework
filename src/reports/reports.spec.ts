@@ -58,7 +58,7 @@ describe('reports', () => {
     expect(invoice.table).toBe('invoices');
     expect(invoice.fields.find((field) => field.name === 'invoiceDate')).toMatchObject({ column: 'invoice_date', type: 'date', label: 'Invoice date' });
     expect(invoice.fields.find((field) => field.name === 'status')).toMatchObject({ type: 'enum', values: ['draft', 'posted', 'cancelled'] });
-    expect(invoice.scope).toEqual({ company: 'company_id', row: 'own', rowColumn: 'branch_id', softDelete: { column: 'deleted_at', kind: 'timestamp' } });
+    expect(invoice.scope).toEqual({ company: 'company_id', row: 'own', rowColumn: 'branch_id', rowColumns: ['branch_id'], softDelete: { column: 'deleted_at', kind: 'timestamp' } });
     expect(invoice.relations.map((relation) => `${relation.name}:${relation.type}`).sort()).toEqual(['branch:one', 'lines:many', 'party:one']);
     // A line reaches its branch through the header it is named after; a shared master is not scoped.
     expect(catalog.models.InvoiceLine!.scope).toMatchObject({ row: 'path', rowPath: 'invoice' });
@@ -87,6 +87,36 @@ describe('reports', () => {
     expect(register.withSql).toMatch(/t0\."branch_id" IN \(:p\d+\)/);
     const idle = compile(SAMPLE_REPORTS.find((report) => report.name === 'sample.party.idle')!).withSql;
     expect(idle.split('FROM "tenant_x"."parties"')[1]!.split('),')[0]).not.toContain('branch_id');
+  });
+
+  /*
+   * A model scoped by more than one column (a transfer: from and to branch), any of them enough
+   * (`rowScope.fields`); its lines reach both through their header. A model with no scope at all (not shared, no
+   * column, no path) is read whole unless `rowScope.unscoped: 'refuse'` makes a missing mapping fail closed.
+   */
+  it('narrows a model by any of several columns, and its lines through the header; refuses an unscoped model when asked', () => {
+    const sequelize = new Sequelize({ dialect: 'postgres', logging: false, database: 'x', username: 'x', password: 'x' });
+    sequelize.addModels(SAMPLE_MODELS);
+    const rowScope = { field: 'branchId', free: ['Branch', 'Party', 'Product', 'Category'], fields: { Transfer: ['fromBranchId', 'toBranchId'] } };
+    const multi = buildReportCatalog(sequelize.models as never, { softDeleteFlags: [] }, rowScope);
+    expect(multi.models.Transfer!.scope).toMatchObject({ row: 'own', rowColumns: ['from_branch_id', 'to_branch_id'] });
+    expect(multi.models.TransferLine!.scope).toMatchObject({ row: 'path', rowPath: 'transfer' });
+    expect(multi.models.Memo!.scope.row).toBe('none');
+
+    const source = (model: string, path: string): Report => ({ lang: 'rdl2', name: `t.${model}`, title: model, category: 'Test', params: [], stages: [{ kind: 'source', id: 'rows', model, fields: [{ as: 'x', path }] }] }) as never;
+    const run = (catalog: typeof multi, report: Report, rowIds: number[] | null) => compileStages(report, { catalog, scope: { ...scope, rowIds }, params: {}, binder: new SqlBinder() }).withSql;
+    const either = /\(t0\."from_branch_id" IN \([^)]*\) OR t0\."to_branch_id" IN \([^)]*\)\)/;
+    expect(run(multi, source('Transfer', 'sentOn'), [1, 2])).toMatch(either);
+    expect(run(multi, source('TransferLine', 'qty'), [1, 2])).toMatch(/\(t1\."from_branch_id" IN \([^)]*\) OR t1\."to_branch_id" IN \([^)]*\)\)/);
+    expect(run(multi, source('Transfer', 'sentOn'), null)).not.toContain('from_branch_id" IN');
+
+    // Not mapped: read whole (as before) unless refused; a user of every branch reads it either way.
+    expect(run(multi, source('Memo', 'text'), [1])).toContain('"memos"');
+    const strict = buildReportCatalog(sequelize.models as never, { softDeleteFlags: [] }, { ...rowScope, unscoped: 'refuse' as const });
+    expect(() => run(strict, source('Memo', 'text'), [1])).toThrow(ReportCompileError);
+    expect(() => run(strict, source('Memo', 'text'), [1])).toThrow(/Memo.*not limited to branches|not limited/i);
+    expect(run(strict, source('Memo', 'text'), null)).toContain('"memos"');
+    expect(run(strict, source('Party', 'name'), [1])).toContain('"parties"');
   });
 
   it('works a project stage kind out in code: empty until the runner has the figures, then joined back', () => {

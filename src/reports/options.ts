@@ -64,6 +64,16 @@ export interface ReportRowScopeOptions {
   free?: readonly string[];
   /** A model without the field: the belongs-to path to one that has it. Items named after their header are found alone. */
   paths?: Readonly<Record<string, string>>;
+  /**
+   * Models scoped by several fields, any of them enough: a transfer `['fromBranchId', 'toBranchId']` is read by a user
+   * of either branch. Their lines reach them through `paths` (or by name) as for one field.
+   */
+  fields?: Readonly<Record<string, readonly string[]>>;
+  /**
+   * A model a scoped user reads that is not scoped (not `free`, no field, no path): `read` (default) reads it whole;
+   * `refuse` refuses the report, so a model left out of the mapping fails closed.
+   */
+  unscoped?: 'read' | 'refuse';
 }
 
 /** The signed-in user as a report needs them. A project's `ReportUserSource` adds what its hooks read. */

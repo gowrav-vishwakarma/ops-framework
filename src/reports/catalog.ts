@@ -42,8 +42,12 @@ export interface CatalogScope {
   company: string | null;
   /** Row scope (`reports.rowScope`): `own` has the scope field, `path` reaches it through `rowPath`, `none` is not scoped. */
   row: 'own' | 'path' | 'none';
-  /** `own`: the scope field's column. */
+  /** `own`: the scope field's column (the first of `rowColumns`). */
   rowColumn?: string;
+  /** `own`: every scope column; any of them is enough (`rowScope.fields`). */
+  rowColumns?: string[];
+  /** Not scoped on purpose: a master every scope shares (`rowScope.free`). */
+  rowShared?: boolean;
   rowPath?: string;
   /** Soft delete: a flag column true when deleted (`reports.catalog.softDeleteFlags`), or a paranoid timestamp. */
   softDelete: { column: string; kind: 'flag' | 'timestamp' } | null;
@@ -62,6 +66,8 @@ export interface CatalogModel {
 export interface ModelCatalog {
   version: string;
   models: Record<string, CatalogModel>;
+  /** `rowScope.unscoped`: a scoped user's read of an unscoped model is refused (`refuse`) or reads it whole. */
+  unscoped?: 'read' | 'refuse';
 }
 
 /** The catalog as the browser gets it: no table or scope column names. */
@@ -162,6 +168,19 @@ export function buildReportCatalog(statics: Record<string, ModelStatic<Model>>, 
       fields.push(field);
     }
     const column = (attr: string) => attributes[attr]?.field ?? attr;
+    // The row scope: several fields (`rowScope.fields`), the one field, a shared master, or none (a path may come later).
+    const rowScopeOf = (model: string): Pick<CatalogScope, 'row' | 'rowColumn' | 'rowColumns' | 'rowShared'> => {
+      if (!rows) return { row: 'none' };
+      if (free.has(model)) return { row: 'none', rowShared: true };
+      const several = rows.fields?.[model];
+      if (several) {
+        const missing = several.filter((attr) => !(attr in attributes));
+        if (missing.length) throw new Error(`reports.rowScope.fields: ${model} has no ${missing.join(', ')}`);
+        const columns = several.map(column);
+        return { row: 'own', rowColumn: columns[0], rowColumns: columns };
+      }
+      return rows.field in attributes ? { row: 'own', rowColumn: column(rows.field), rowColumns: [column(rows.field)] } : { row: 'none' };
+    };
     const flag = (notes.softDeleteFlags ?? []).find((attr) => attr in attributes);
     const paranoid = model.options.paranoid ? (typeof model.options.deletedAt === 'string' ? model.options.deletedAt : 'deletedAt') : null;
     models[name] = {
@@ -173,8 +192,7 @@ export function buildReportCatalog(statics: Record<string, ModelStatic<Model>>, 
       relations: [],
       scope: {
         company: PARTITION.field in attributes && !PARTITION.exempt.includes(name) ? column(PARTITION.field) : null,
-        row: rows && !free.has(name) && rows.field in attributes ? 'own' : 'none',
-        ...(rows && !free.has(name) && rows.field in attributes ? { rowColumn: column(rows.field) } : {}),
+        ...rowScopeOf(name),
         softDelete: flag ? { column: column(flag), kind: 'flag' } : paranoid ? { column: column(paranoid), kind: 'timestamp' } : null,
       },
     };
@@ -237,5 +255,5 @@ export function buildReportCatalog(statics: Record<string, ModelStatic<Model>>, 
   }
 
   const version = createHash('sha1').update(JSON.stringify(models)).digest('hex').slice(0, 12);
-  return { version, models };
+  return { version, models, ...(rows?.unscoped ? { unscoped: rows.unscoped } : {}) };
 }

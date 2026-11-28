@@ -74,6 +74,11 @@ export class MyReportsModule {}
   the field are scoped by it; a line model reaches it through the header it is named after (`InvoiceLine` →
   `invoice`) or a listed path (`paths`); `free` models (masters) are never scoped. `allowed(user)` answers null for
   all, else the values (empty: none). An input marked `branchScope: true` narrows it, never widens it.
+  A model scoped by several fields, any of them enough, lists them in `fields` (a transfer
+  `{ Transfer: ['fromBranchId', 'toBranchId'] }`: a user of either branch reads it, `(from IN ids OR to IN ids)`; its
+  lines reach both through their header). A model with none of these (not free, no field, no path) is read whole by
+  default; `unscoped: 'refuse'` refuses such a read under a scoped right instead, so a model left out of the mapping
+  fails closed (a user who reads every branch is never refused). A stage marked `branchScope: 'none'` stays unscoped.
 - **Catalog notes**: `include`, `hiddenModels`, `hiddenFields` (beyond the framework's: password, secret, token, otp,
   apiKey, hash, salt, privateKey), `labels`, `acronyms`, `softDeleteFlags` (a flag field true on a deleted row, such
   as `isDelete`; paranoid models are found by themselves). Company scope is the framework's partition field.

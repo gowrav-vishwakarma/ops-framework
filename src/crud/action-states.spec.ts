@@ -6,6 +6,8 @@ import type { ReqCtx } from '../auth/auth-user.js';
 import type { RowGuard } from './row-guard.js';
 import { computeActionStates, type ActionStateEnv } from './action-states.js';
 import type { EntityAction } from './entity-action.js';
+import { runBuiltInChecks } from './row-checks.js';
+import { fakeOpContext } from './testing/op-test.js';
 
 const ctx: ReqCtx = { scope: 'all', limits: {}, user: { id: 1, platformUserId: 1, companyId: 1, epoch: 1, branchId: 2, branchIds: [2], roleId: 1, aclVersion: 0, partyId: null, name: 'T' } };
 const row = (values: Record<string, unknown>) => ({ get: (key: string) => values[key] }) as never;
@@ -64,5 +66,37 @@ describe('_actions: what each button can do on this row', () => {
     expect(states.reopen?.allowed).toBe(true);
     const unfreezer = new Map([...full, ['invoice.unfreeze', { scope: 'all', limits: {} }]]);
     expect((await computeActionStates(env, ctx, old, unfreezer, prepared)).update?.allowed).toBe(true);
+  });
+});
+
+/*
+ * `editable(row, ctx)` on the service: whether the record can be edited in its current state (a trip only while
+ * planned, a document until cancelled). Shown in `_actions.update` and refused on update with the other checks; actions
+ * and the write guard never run it, so an action's own save on such a record goes through.
+ */
+describe('editable: update in the record\'s current state', () => {
+  const full = grants({ 'invoice.update': { scope: 'all' }, 'invoice.delete': { scope: 'all' }, 'invoice.approve': { scope: 'all', limits: { amount: 1000 } }, 'invoice.reopen': { scope: 'all' }, 'invoice.close': { scope: 'all' } });
+  const plannedOnly: ActionStateEnv<never> = { ...env, editable: (r: { get(k: string): unknown }) => (r.get('status') === 'planned' ? null : `This trip is ${String(r.get('status'))}: it can no longer be edited`) };
+
+  it('_actions.update says why not (not a permission refusal); delete and actions are not affected', async () => {
+    const states = await computeActionStates(plannedOnly, ctx, row({ status: 'in_transit', total: 100 }), full);
+    expect(states.update).toEqual({ allowed: false, reason: 'This trip is in_transit: it can no longer be edited' });
+    expect(states.delete).toEqual({ allowed: true, reason: null });
+    expect(states.reopen).toEqual({ allowed: true, reason: null });
+    expect((await computeActionStates(plannedOnly, ctx, row({ status: 'planned', total: 100 }), full)).update).toEqual({ allowed: true, reason: null });
+  });
+
+  it('a missing permission still reads as a permission refusal first', async () => {
+    expect((await computeActionStates(plannedOnly, ctx, row({ status: 'in_transit' }), grants({}))).update?.denied).toBe('permission');
+  });
+
+  it('without editable nothing changes', async () => {
+    expect((await computeActionStates(env, ctx, row({ status: 'in_transit', total: 100 }), full)).update).toEqual({ allowed: true, reason: null });
+  });
+
+  it('the update refuses under "state" with the other checks (all refusals at once)', async () => {
+    const c = fakeOpContext({ op: 'update' } as never);
+    await runBuiltInChecks(c as never, { label: 'Edit', state: 'This trip is in_transit: it can no longer be edited' } as never);
+    expect(c.issues.blockers).toEqual([{ code: 'state', message: 'This trip is in_transit: it can no longer be edited' }]);
   });
 });

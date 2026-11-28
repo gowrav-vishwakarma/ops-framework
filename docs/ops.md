@@ -226,6 +226,20 @@ An action also says how the UI shows it. All fields are optional and travel in `
 
 `GET /<resource>?actions=1` adds `_actions` to every row: `{ <name>: { allowed, reason } }`, one entry per action the caller holds plus `update` and `delete`. `allowed` is false with a reason when the row is in the wrong state (`from`), outside the caller's scope, refused by a row guard (a locked period), over a limit or soft deleted, or when `available` says no. When the reason is the caller's rights (no grant, or the row is outside the granted scope), the state also has `denied: 'permission'`: a client shows those apart from a row that cannot take the action (a system record, a wrong state), because only the owner or an administrator can change them. The reason is in words (`You don't have permission to edit account`). It is a hint for buttons; the steps still decide.
 
+**Edit in the record's current state: `editable(row, ctx)`.** A rule about when a record may be edited at all (a trip
+only while planned, a document until cancelled or while its year is open) goes on the service, not in a row guard (a
+guard also runs on every action's own save, so it would block the record's actions) and not only in a check step (the
+UI would still be offered Edit). `protected override editable(row, ctx)` returns a reason in words, or `null`:
+`_actions.update` shows it (`allowed: false`, no `denied`), and an update refuses with it under `state` together with
+the other checks, asked of the record as stored before the payload is applied. Actions and the write guard never ask
+it. Optional: a service without it edits as before.
+
+```ts
+protected override editable(row: Trip) {
+  return row.status === 'planned' ? null : `This trip is ${row.status.replace('_', ' ')}: it can no longer be edited`;
+}
+```
+
 **Creator of every row.** The signed-in company user (or admin) of a request is its actor (`JwtAuthGuard` → `setActor`); every new row of a model with `createdById` (or `created_by_id`) gets the actor of its id space as its creator (tenant tables: the company user; control tables: the admin; a company request writing a control table leaves it to the code), through a model hook installed on every bound model: the operation's record, a step's child rows, a service's bulk inserts alike, so no endpoint or step stamps it. A creator the code sets is kept. Portal and API-key requests, jobs and work outside a request have no actor and stamp nothing. `currentActor()` reads it.
 
 **Permission refusals.** A missing right is refused with `PermissionDeniedException` (403): `{ statusCode, error, code: 'PERMISSION_DENIED', permission, message }`, where the message is a sentence a person reads ("You don't have permission to delete account. Ask the owner or your administrator to give you this right."). The guard, the CRUD service and lookups all throw it through `permissionDenied(options, code)`; project code refusing on a right uses the same. The words come from the catalog entry's label, else `acl.actionLabels` (on top of the framework's View/Create/Edit/Delete…) and the humanized resource. Licence and system refusals keep their own codes, so a client can tell the three apart.

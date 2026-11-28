@@ -33,11 +33,15 @@ export interface BuiltInChecks<M extends Model> {
   jsonMerge?: boolean;
   /** How unknown JSON keys are treated (`payloads.strict`). */
   jsonStrict?: PayloadStrictness;
+  /** Why the record cannot take this operation in its stored state (the service's `editable` on update), or none. */
+  state?: string | null;
 }
 
 /** Blocks when a project guard refuses the record, or it is above the caller's limit. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function runBuiltInChecks<M extends Model>(c: OpContext<M, Attrs, any, any>, spec: BuiltInChecks<M>): Promise<void> {
+  // The record's state (as stored) refuses with the other checks, as an action's start state does.
+  if (spec.state) c.issues.block('state', spec.state);
   // First: guards, limits and the check steps then see the checked JSON values.
   if (spec.json && Object.keys(spec.json).length) applyJsonColumns(c as never, spec.json, undefined, { merge: spec.jsonMerge, strict: spec.jsonStrict });
   for (const guard of spec.guards ?? []) {

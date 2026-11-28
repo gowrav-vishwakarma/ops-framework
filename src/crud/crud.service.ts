@@ -244,6 +244,14 @@ export abstract class CrudService<
   }
 
   /**
+   * Whether the record can be edited in its current (stored) state: a reason in words when it cannot (a trip only while
+   * planned, a document until cancelled), else `null`. Shown in `_actions.update` (not as a permission refusal) and
+   * refused on update under `state`, with the other checks. Actions and the write guard never ask it, so an action's own
+   * save on such a record is not refused. Optional: a service without it edits as before.
+   */
+  protected editable?(row: M, ctx: ReqCtx<U>): string | null;
+
+  /**
    * Fields that cannot be changed while the row is in its current state, with the reason:
    * `{ rate: 'LR is already billed' }`. Sent with the row so a form can lock those fields too.
    */
@@ -479,6 +487,7 @@ export abstract class CrudService<
       actionPermission: (action: EntityAction<M, U>) => this.actionPermission(action),
       permission: (action: string) => this.permission(action),
       permissionLabel: (code: string) => permissionLabel(this.frameworkOptions, code),
+      ...(this.editable ? { editable: (row: M, c: ReqCtx<U>) => this.editable!(row, c) } : {}),
     };
     for (const row of rows) row.setDataValue('_actions' as never, (await computeActionStates(env as never, ctx as never, row, granted, prepared)) as never);
   }
@@ -527,8 +536,8 @@ export abstract class CrudService<
 
   // ---- writes ---------------------------------------------------------------------------
 
-  private writeChecks(op: string, label: string): BuiltInChecks<M> {
-    return { label, limits: limitsFor(op, this.limits), guards: this.guards, refs: true, json: this.jsonColumns, jsonMerge: this.jsonMerge, jsonStrict: this.frameworkOptions?.payloads?.strict ?? 'error' };
+  private writeChecks(op: string, label: string, state: string | null = null): BuiltInChecks<M> {
+    return { label, limits: limitsFor(op, this.limits), guards: this.guards, refs: true, json: this.jsonColumns, jsonMerge: this.jsonMerge, jsonStrict: this.frameworkOptions?.payloads?.strict ?? 'error', state };
   }
 
   async create(ctx: ReqCtx<U>, dto: TCreate, outer?: Transaction, confirmed = false): Promise<unknown> {
@@ -556,6 +565,8 @@ export abstract class CrudService<
     await this.inTx(outer, async (t) => {
       const row = await this.findOne(ctx, id, t, true);
       const before = { ...row.get({ plain: true }) } as Attrs;
+      // Asked of the record as stored, before the payload is applied.
+      const notEditable = this.editable?.(row, ctx) ?? null;
       const locks = this.editLocks(row, ctx);
       row.set((await this.toUpdate(ctx, dto, row, t)) as never);
       this.rejectLockedEdits(row, before, locks);
@@ -564,7 +575,7 @@ export abstract class CrudService<
       await this.runSteps(c, confirmed, async () => {
         c.row.set(this.updateStamps(ctx) as never);
         await c.row.save({ transaction: t });
-      }, { builtIn: this.writeChecks('update', 'Edit') });
+      }, { builtIn: this.writeChecks('update', 'Edit', notEditable) });
       await this.afterSave(c);
       const changes = this.diff(c.row, before);
       if (Object.keys(changes).length) {

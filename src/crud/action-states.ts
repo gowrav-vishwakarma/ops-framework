@@ -22,11 +22,14 @@ export interface ActionStateEnv<M extends Model> {
   permission?(op: string): string;
   /** Words for a permission code in a refusal (`permissionLabel`). Default: the code humanized. */
   permissionLabel?(code: string): string;
+  /** The service's `editable(row, ctx)`: a reason the record cannot be edited in its current state, or `null`. */
+  editable?(row: M, ctx: ReqCtx): string | null;
 }
 
 /**
  * Whether each action (and edit/delete) can run on a loaded record right now: permission, scope,
- * start state, project guards, authority limit and the action's `available()`. Computed from data
+ * start state, project guards, authority limit and the action's `available()` (for edit, the service's
+ * `editable()`). Computed from data
  * already loaded (`prepared` holds each guard's `prepare` result); check steps are not run, so the
  * real call can still refuse.
  */
@@ -39,7 +42,11 @@ export async function computeActionStates<M extends Model>(
 ): Promise<Record<string, ActionState>> {
   const out: Record<string, ActionState> = {};
   const can = async (code: string) => granted.has(code);
-  const decide = async (name: string, code: string, extra: { action?: EntityAction<M, any>; limits?: readonly LimitDef<M>[] }): Promise<ActionState> => {
+  const decide = async (
+    name: string,
+    code: string,
+    extra: { action?: EntityAction<M, any>; limits?: readonly LimitDef<M>[]; available?: (row: M, ctx: ReqCtx) => string | null },
+  ): Promise<ActionState> => {
     const grant = granted.get(code);
     if (!grant) return { allowed: false, reason: `You don't have permission to ${env.permissionLabel?.(code) ?? permissionLabel(undefined, code)}`, denied: 'permission' };
     const own: ReqCtx = { ...ctx, scope: grant.scope, limits: grant.limits, ...(grant.params ? { scopeParams: grant.params } : {}) };
@@ -55,11 +62,11 @@ export async function computeActionStates<M extends Model>(
     }
     const limit = limitReason(own, row, extra.limits);
     if (limit) return { allowed: false, reason: limit };
-    const unavailable = action?.available?.(row, own) ?? null;
+    const unavailable = (extra.available ?? action?.available)?.(row, own as never) ?? null;
     return unavailable ? { allowed: false, reason: unavailable } : { allowed: true, reason: null };
   };
   const code = (op: string) => env.permission?.(op) ?? `${env.resource}.${op}`;
-  out.update = await decide('update', code('update'), { limits: env.limits.update });
+  out.update = await decide('update', code('update'), { limits: env.limits.update, ...(env.editable ? { available: (r: M, c: ReqCtx) => env.editable!(r, c) } : {}) });
   out.delete = await decide('delete', code('delete'), { limits: env.limits.delete });
   for (const action of env.actions) {
     out[action.name] = await decide(action.name, env.actionPermission(action), { action, limits: action.limits ?? env.limits[action.name] });

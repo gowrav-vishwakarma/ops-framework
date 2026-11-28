@@ -50,11 +50,7 @@ export class RedisStreamTransport extends EventTransport {
 
   async start(subscriptions: Subscription[], deliver: Deliver): Promise<void> {
     if (subscriptions.length === 0) return;
-    for (const subscription of subscriptions) {
-      await this.writer.xgroup('CREATE', streamOf(subscription.contract.name), subscription.id, '$', 'MKSTREAM').catch((error: Error) => {
-        if (!error.message.includes('BUSYGROUP')) throw error;
-      });
-    }
+    for (const subscription of subscriptions) await this.ensureGroup(subscription, '$');
     this.running = true;
     this.loop = this.run(subscriptions, deliver);
   }
@@ -66,6 +62,17 @@ export class RedisStreamTransport extends EventTransport {
     this.writer.disconnect();
   }
 
+  /**
+   * The subscriber's consumer group on its stream (made with the stream). At start it reads from new events on (`$`).
+   * Made again from the stream's start (`0`) when Redis lost it (a restart without persistence, an eviction): the stream
+   * then holds only events published since, none of them read, so none is lost. Another replica making it first is fine.
+   */
+  private async ensureGroup(subscription: Subscription, from: '$' | '0'): Promise<void> {
+    await this.writer.xgroup('CREATE', streamOf(subscription.contract.name), subscription.id, from, 'MKSTREAM').catch((error: Error) => {
+      if (!error.message.includes('BUSYGROUP')) throw error;
+    });
+  }
+
   private async run(subscriptions: Subscription[], deliver: Deliver): Promise<void> {
     let lastClaim = 0;
     while (this.running) {
@@ -74,9 +81,16 @@ export class RedisStreamTransport extends EventTransport {
         const claim = Date.now() - lastClaim > this.claimIdleMs / 2;
         if (claim) lastClaim = Date.now();
         for (const subscription of subscriptions) {
-          if (claim) handled += await this.reclaim(subscription, deliver);
-          const reply = (await this.reader.xreadgroup('GROUP', subscription.id, this.consumer, 'COUNT', 50, 'STREAMS', streamOf(subscription.contract.name), '>')) as Array<[string, Entry[]]> | null;
-          for (const [, entries] of reply ?? []) for (const entry of entries) handled += await this.handle(subscription, entry, deliver);
+          try {
+            if (claim) handled += await this.reclaim(subscription, deliver);
+            const reply = (await this.reader.xreadgroup('GROUP', subscription.id, this.consumer, 'COUNT', 50, 'STREAMS', streamOf(subscription.contract.name), '>')) as Array<[string, Entry[]]> | null;
+            for (const [, entries] of reply ?? []) for (const entry of entries) handled += await this.handle(subscription, entry, deliver);
+          } catch (error) {
+            // Redis lost the stream and its group: make them again, then read on (else NOGROUP for ever).
+            if (!(error instanceof Error) || !error.message.includes('NOGROUP')) throw error;
+            this.logger.warn(`${subscription.id}: consumer group gone from Redis (restart or eviction); made again`);
+            await this.ensureGroup(subscription, '0');
+          }
         }
       } catch (error) {
         if (this.running) this.logger.error(`Event loop: ${error instanceof Error ? error.message : String(error)}`);

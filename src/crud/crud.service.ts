@@ -20,7 +20,7 @@ import type { EffectivePermissions, Grant } from '../acl/acl.service.js';
 import type { LimitDef } from '../acl/limits.js';
 import { PermissionMeta } from '../acl/limits.js';
 import { allScope, resolveScopes, type ScopeDef, type ScopeRef } from '../acl/scopes.js';
-import type { Actor, ReqCtx } from '../auth/auth-user.js';
+import { withGrant, type Actor, type ReqCtx } from '../auth/auth-user.js';
 import { flattenValidationErrors, payloadErrors } from '../errors.js';
 import { checkPayload, payloadProblems } from '../payload/check-payload.js';
 import { FRAMEWORK_OPTIONS, type FrameworkOptions } from '../options.js';
@@ -288,6 +288,20 @@ export abstract class CrudService<
     return grant;
   }
 
+  /**
+   * The caller's context for one of this service's operations (an action's name, or `update` / `delete`): their own
+   * grant of its permission (scope, limits, scope data), as this resource's controller would give it; 403 without it.
+   * For a step of another resource calling `perform` here: the outer operation's scope means something else on this
+   * resource (its `branch` scope reads another column), so `perform(c.ctx, …)` would find the wrong rows.
+   *
+   *   const lrs = c.get(LrsService);
+   *   await lrs.perform(await lrs.ctxFor(c.ctx, 'track'), lrId, 'track', {}, c.t);
+   */
+  async ctxFor(ctx: ReqCtx<U>, operation: string): Promise<ReqCtx<U>> {
+    const action = this.actionList.find((item) => item.name === operation);
+    return withGrant(ctx, await this.grantOf(ctx, action ? this.actionPermission(action) : this.permission(operation)));
+  }
+
   /** Named actions the caller may run, for the toolbar and row menus. */
   async allowedActions(ctx: ReqCtx<U>) {
     const granted = await this.effective(ctx);
@@ -403,7 +417,7 @@ export abstract class CrudService<
     const granted = await this.effective(ctx);
     if (def.permission && !granted.has(this.permission(def.permission))) throw permissionDenied(this.frameworkOptions, this.permission(def.permission));
     const grant = granted.get(this.permission(def.permission ?? 'list'));
-    const scoped = grant ? ({ ...ctx, scope: grant.scope, limits: grant.limits ?? {}, ...(grant.params ? { scopeParams: grant.params } : {}) } as ReqCtx<U>) : ({ ...ctx, scope: 'all' } as ReqCtx<U>);
+    const scoped = grant ? withGrant(ctx, grant) : ({ ...ctx, scope: 'all' } as ReqCtx<U>);
     const params = lookupParams(def, raw);
     const find = buildLookupFind(this.model as never, def, query);
     const page = { where: [this.scopeWhere(scoped), ...find.where], include: find.include, order: find.order, limit: find.limit, offset: find.offset, attributes: find.attributes };

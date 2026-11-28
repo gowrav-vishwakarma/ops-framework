@@ -1,3 +1,4 @@
+import type { Grant } from '../acl/acl.service.js';
 /**
  * Name of a data scope: `all`, `branch`, `own`, or one an app or a resource declares
  * (`active-only`). An unknown scope is denied, never treated as `all`.
@@ -66,4 +67,12 @@ export interface ReqCtx<U extends Actor = AuthUser> {
   limits: Limits;
   /** What the grant carries for its scope (`Grant.params`), e.g. `{ branchIds: [1, 4] }`. */
   scopeParams?: Record<string, unknown>;
+}
+
+/**
+ * The caller's context with the scope, limits and scope data of one of their grants: what a request for that permission
+ * runs with (the controller's context for an action, `ctxFor` for an operation of another resource).
+ */
+export function withGrant<C extends ReqCtx<any>>(ctx: C, grant: Grant): C {
+  return { ...ctx, scope: grant.scope, limits: grant.limits ?? {}, ...(grant.params ? { scopeParams: grant.params } : { scopeParams: undefined }) };
 }

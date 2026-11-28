@@ -185,7 +185,12 @@ Every step, the execute file, and the audit share one `c` object. Change it and 
 - **Who.** `c.user` (id, companyId, branchId, branchIds, roleId, partyId, name), `c.scope` (the scope id of the permission being run: `all`, `branch`, `own` or one the app registers) and `c.limits` (its authority limits), `c.can('user.view')` for some other permission.
 - **The row.** `c.row`, `c.before` (stored values; null on create), `c.dto` (body, or the validated action input), `c.changed('status')`, `c.reload()`. On a bulk action, `c.rows` is the whole selection; the steps still run once per record.
 - **Transaction.** Pass `{ transaction: c.t }` on every query. `c.savepoint(work)` rolls back only that work if it throws. `c.separate(work)` commits immediately, even when a later check blocks — do not touch rows this transaction has locked. `c.afterCommit(work)` runs only after a successful commit.
-- **Services.** `c.get(UsersService)` resolves any provider without importing its module. Calling `c.get(PartiesService).perform(c.ctx, id, 'settle', input, c.t)` runs that operation's own steps and audit row inside this transaction.
+- **Services.** `c.get(UsersService)` resolves any provider without importing its module. Calling another resource's
+  action runs that operation's own steps and audit row inside this transaction, with the caller's own grant of THAT
+  action (`ctxFor`: its scope, limits and scope data, 403 without it), not the outer operation's (a scope id such as
+  `branch` reads a different column on each resource):
+  `const parties = c.get(PartiesService); await parties.perform(await parties.ctxFor(c.ctx, 'settle'), id, 'settle', input, c.t)`.
+  Work the user is not asked to hold a right for (system bookkeeping) goes through the steps or the models instead.
 - **Raw SQL.** `c.count('users WHERE branch_id = :id', { id })` and `c.sql(sql, replacements, t?)` (rows as objects; `t` defaults to `c.t`). Both run in the tenant's schema.
 - **Other services.** `c.service(Platform).command('inviteMember', input)` / `.query('seats', input)` calls another service's contract (in process or over HTTP, the same either way; see Services). It runs in that service's own transaction, not in `c.t`. `await c.emit(TenantMembers, 'memberConfirmed', payload)` publishes an event durably: written in `c.t`, delivered after commit, never for a rollback. Tenant steps never touch the control plane directly.
 - **Other.** `c.result` (return this instead of the saved row).

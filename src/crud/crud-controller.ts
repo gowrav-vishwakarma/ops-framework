@@ -1,6 +1,6 @@
 import { Body, Delete, Get, Inject, Param, ParseIntPipe, Patch, Post, Query, Req, type Type } from '@nestjs/common';
 import type { Grant } from '../acl/acl.service.js';
-import type { ReqCtx } from '../auth/auth-user.js';
+import { withGrant, type ReqCtx } from '../auth/auth-user.js';
 import { AdminRoutes, Ctx, RequirePermission } from '../auth/decorators.js';
 import { ListQueryDto } from './list-query.dto.js';
 import { CRUD_ROUTE, PAYLOAD_FALLBACK, ROUTE_WORK } from '../payload/route-meta.js';
@@ -47,10 +47,6 @@ interface CrudOptions<S> {
   reads?: ReadonlyArray<'list' | 'get' | 'history'>;
 }
 
-/** The caller's context with the scope, limits and scope data of another grant (an action's). */
-function withGrant(ctx: ReqCtx, grant: Grant): ReqCtx {
-  return { ...ctx, scope: grant.scope, limits: grant.limits, ...(grant.params ? { scopeParams: grant.params } : { scopeParams: undefined }) };
-}
 
 /**
  * The standard routes of a collection, guarded by `resource.view|create|update|delete`: a tenant's
